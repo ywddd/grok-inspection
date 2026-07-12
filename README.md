@@ -39,6 +39,18 @@ Windows PowerShell:
 
 The binary is written to `dist/`.
 
+## Release Assets
+
+Official CPA plugin distribution reads the latest GitHub Release. Tag releases
+with a dotted version such as `v0.1.0`. The release workflow publishes:
+
+```text
+grok-inspection_0.1.0_linux_amd64.zip
+checksums.txt
+```
+
+The zip contains `grok-inspection.so` at its root.
+
 ## Install
 
 Copy the Linux artifact to the CPA plugin directory:

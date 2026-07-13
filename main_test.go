@@ -19,6 +19,44 @@ func TestManagementStatusReturnsJSON(t *testing.T) {
 	}
 }
 
+func TestManagementStatusLightOmitsResults(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{
+		workers: defaultWorkers,
+		results: []accountResult{
+			{Name: "a", AuthIndex: "1", FileName: "a.json", Classification: "healthy", Action: "keep"},
+			{Name: "b", AuthIndex: "2", FileName: "b.json", Classification: "reauth", Action: "delete"},
+		},
+		resultsGen: 9,
+	}
+	t.Cleanup(func() { engine = old })
+
+	light := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/status",
+		Query:  map[string][]string{"include_results": {"0"}},
+	})
+	body := string(light.Body)
+	if strings.Contains(body, `"results":[`) {
+		t.Fatalf("light status should omit results array: %s", body)
+	}
+	if !strings.Contains(body, `"include_results":false`) {
+		t.Fatalf("light status missing include_results=false: %s", body)
+	}
+	if !strings.Contains(body, `"results_gen":9`) {
+		t.Fatalf("light status missing results_gen: %s", body)
+	}
+
+	full := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/status",
+		Query:  map[string][]string{"include_results": {"1"}},
+	})
+	if !strings.Contains(string(full.Body), `"results":[`) {
+		t.Fatalf("full status should include results: %s", string(full.Body))
+	}
+}
+
 func TestResourceStatusReturnsHTML(t *testing.T) {
 	response := dispatchManagement(pluginapi.ManagementRequest{
 		Method: http.MethodGet,
@@ -33,12 +71,15 @@ func TestResourceStatusReturnsHTML(t *testing.T) {
 func TestResourcePageDoesNotPollWithoutManagementKey(t *testing.T) {
 	page := string(renderUIPage(pluginName))
 	guard := "if (!keyInput.value.trim())"
-	refresh := "async function refresh()"
+	refresh := "async function refresh(opts)"
 	refreshIndex := strings.Index(page, refresh)
 	guardIndex := strings.Index(page, guard)
 
 	if refreshIndex < 0 || guardIndex < refreshIndex {
 		t.Fatalf("refresh must guard management requests with %q", guard)
+	}
+	if !strings.Contains(page, `include_results=0`) || !strings.Contains(page, `refresh({ light: true })`) {
+		t.Fatal("page should light-poll /status without full results during jobs")
 	}
 }
 

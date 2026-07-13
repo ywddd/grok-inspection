@@ -141,6 +141,20 @@ func TestIncrementalStartRequiresExistingResults(t *testing.T) {
 	}
 }
 
+func TestDeleteAuthFilesBatchBuildsNamesBody(t *testing.T) {
+	// Smoke: empty input is a no-op.
+	if fails := deleteAuthFilesBatch(nil, "x", nil, false); len(fails) != 0 {
+		t.Fatalf("empty batch failures = %#v", fails)
+	}
+	// Missing file names should fail locally without calling management HTTP.
+	fails := deleteAuthFilesBatch([]accountResult{
+		{Name: "", AuthIndex: "", FileName: ""},
+	}, "x", nil, false)
+	if len(fails) != 1 || !strings.Contains(fails[0], "auth file name missing") {
+		t.Fatalf("failures = %#v", fails)
+	}
+}
+
 func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	dir := t.TempDir()
 	setStoreFilePathForTest(dir + string(os.PathSeparator) + "results.json")
@@ -168,9 +182,15 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	if time.Since(begin) > 100*time.Millisecond {
 		t.Fatalf("startApply should return immediately, took %s", time.Since(begin))
 	}
-	snap := engine.snapshot()
+	snap := engine.snapshot(false)
 	if !snap.Applying {
 		t.Fatal("expected applying=true")
+	}
+	if snap.IncludeResults {
+		t.Fatal("light snapshot should set include_results=false")
+	}
+	if len(snap.Results) != 0 {
+		t.Fatalf("light snapshot should omit results, got %d", len(snap.Results))
 	}
 	// status path is pure memory and must not wait on apply/delete work
 	resp := dispatchManagement(pluginapi.ManagementRequest{

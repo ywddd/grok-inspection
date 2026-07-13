@@ -12,7 +12,7 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.5"
+	pluginVersion         = "0.1.9"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -95,7 +95,8 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		return htmlResponse(http.StatusOK, renderUIPage(pluginName))
 	case method == http.MethodGet && matchesManagementPath(req.Path, "/status"):
 		// Pure memory snapshot — never blocks on host or management HTTP.
-		return jsonResponse(http.StatusOK, engine.snapshot())
+		// light=1 / include_results=0: progress meta only (cheap poll during inspect/apply).
+		return jsonResponse(http.StatusOK, engine.snapshot(statusWantsResults(req)))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/start"):
 		var body startRequest
 		if len(req.Body) > 0 {
@@ -104,15 +105,18 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		if err := engine.start(body); err != nil {
 			status := http.StatusConflict
 			msg := err.Error()
-			if strings.Contains(msg, "workers must") || strings.Contains(msg, "增量巡检") {
+			if strings.Contains(msg, "workers must") || strings.Contains(msg, "增量巡检") || strings.Contains(msg, "busy") {
 				status = http.StatusBadRequest
+				if strings.Contains(msg, "busy") || strings.Contains(msg, "already running") {
+					status = http.StatusConflict
+				}
 			}
 			return jsonResponse(status, map[string]any{"error": msg})
 		}
-		return jsonResponse(http.StatusOK, engine.snapshot())
+		return jsonResponse(http.StatusOK, engine.snapshot(true))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
 		engine.stop()
-		return jsonResponse(http.StatusOK, engine.snapshot())
+		return jsonResponse(http.StatusOK, engine.snapshot(false))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/apply"):
 		var body applyRequest
 		if len(req.Body) > 0 {
@@ -130,8 +134,8 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			}
 			return jsonResponse(status, map[string]any{"error": msg})
 		}
-		// Slim ack — full account list is only on GET /status.
-		snap := engine.snapshot()
+		// Slim ack — full account list is only on GET /status (include_results=1).
+		snap := engine.snapshot(false)
 		return jsonResponse(http.StatusAccepted, map[string]any{
 			"ok":          true,
 			"accepted":    true,
@@ -174,8 +178,26 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	}
 }
 
+// statusWantsResults defaults to full results; light polls pass include_results=0 or light=1.
+func statusWantsResults(req pluginapi.ManagementRequest) bool {
+	if req.Query == nil {
+		return true
+	}
+	if v := strings.TrimSpace(req.Query.Get("include_results")); v != "" {
+		return !(v == "0" || strings.EqualFold(v, "false") || strings.EqualFold(v, "no"))
+	}
+	if v := strings.TrimSpace(req.Query.Get("light")); v != "" {
+		return !(v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes"))
+	}
+	return true
+}
+
 func matchesManagementPath(path, suffix string) bool {
 	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	// Strip query if a gateway put it on Path.
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
 	if !strings.HasPrefix(suffix, "/") {
 		suffix = "/" + suffix
 	}

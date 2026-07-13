@@ -70,7 +70,8 @@ func savePersistedSnapshot(snap persistedSnapshot) error {
 	}
 	snap.Version = storeVersion
 	snap.SavedAt = time.Now().Format(time.RFC3339)
-	raw, err := json.MarshalIndent(snap, "", "  ")
+	// Compact JSON: with 1000+ accounts, Indent costs CPU and multiplies disk size.
+	raw, err := json.Marshal(snap)
 	if err != nil {
 		return err
 	}

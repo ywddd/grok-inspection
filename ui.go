@@ -432,25 +432,48 @@ func renderUIPage(pluginID string) []byte {
     return r.file_name || r.name || r.auth_index || r.email || '';
   }
   function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-  async function waitRowOpResult(key, act, displayName, timeoutMs) {
-    const start = Date.now();
+  // After async /action accepts, UI is optimistic. Background reconcile must NOT
+  // blindly overwrite local rows while the backend is still finishing (that would
+  // flicker disabled/delete back). Only pull server state when failure is known
+  // or the expected outcome is already visible.
+  async function confirmRowOpInBackground(key, act, displayName) {
     const needle = String(displayName || key || '');
-    while (Date.now() - start < (timeoutMs || 20000)) {
-      await refresh();
-      const rows = state.snapshot.results || [];
+    const matchesFail = (fails) => (fails || []).find((f) => {
+      const s = String(f || '');
+      return (key && s.indexOf(key) >= 0) || (needle && s.indexOf(needle) >= 0);
+    });
+    const outcomeReady = (snap) => {
+      const rows = (snap && snap.results) || [];
       const row = rows.find((item) => rowKey(item) === key);
-      if (act === 'delete' && !row) return { ok: true };
-      if (act === 'disable' && row && row.disabled) return { ok: true };
-      if (act === 'enable' && row && !row.disabled) return { ok: true };
-      const fails = state.snapshot.apply_failures || [];
-      const hit = fails.find((f) => {
-        const s = String(f || '');
-        return (key && s.indexOf(key) >= 0) || (needle && s.indexOf(needle) >= 0);
-      });
-      if (hit) return { ok: false, error: hit };
-      await sleep(350);
+      if (act === 'delete') return !row;
+      if (act === 'disable') return !!(row && row.disabled);
+      if (act === 'enable') return !!(row && !row.disabled);
+      return true;
+    };
+    try {
+      for (let i = 0; i < 6; i++) {
+        await sleep(i === 0 ? 300 : 250);
+        if (pendingOps.has(key)) continue;
+        const data = await api('/status', { method: 'GET' });
+        const hit = matchesFail(data && data.apply_failures);
+        if (hit) {
+          // Failure: take server truth so optimistic UI is rolled back.
+          state.snapshot = data || state.snapshot;
+          showErr(hit);
+          render();
+          return;
+        }
+        if (outcomeReady(data)) {
+          // Success visible on server — sync (keeps counts/summary accurate).
+          state.snapshot = data || state.snapshot;
+          render();
+          return;
+        }
+        // Still in-flight: keep optimistic UI, do not replace snapshot yet.
+      }
+    } catch (e) {
+      // Ignore background network blips; user can refresh manually.
     }
-    return { ok: false, error: '操作超时，请刷新后确认是否已生效' };
   }
   async function runRowAction(r, act, tr) {
     const key = rowKey(r);
@@ -466,7 +489,6 @@ func renderUIPage(pluginID string) []byte {
     }
     pendingOps.add(key);
     if (tr) tr.classList.add('row-busy');
-    render(); // reflect busy state on buttons without blocking other rows
     try {
       const result = await api('/action', {
         method: 'POST',
@@ -480,26 +502,37 @@ func renderUIPage(pluginID string) []byte {
       if (!result || result.ok === false) {
         throw new Error((result && result.error) || (label + '失败'));
       }
-      // Optimistic fade so the user sees immediate feedback; confirm via status poll.
-      if (act === 'delete' && tr) {
-        tr.classList.remove('row-busy');
-        tr.classList.add('row-out');
-      }
-      // Action is accepted async (avoid management re-entry deadlock); poll until CPA state matches.
-      const waited = await waitRowOpResult(key, act, r.name || actionTargetName(r), 20000);
-      if (!waited.ok) throw new Error(waited.error || (label + '失败'));
+      // Optimistic UI: /action is 202-accepted; do not block on backend completion.
       if (act === 'delete') {
-        showOk('删除成功：' + (r.name || key));
+        if (tr) {
+          tr.classList.remove('row-busy');
+          tr.classList.add('row-out');
+          await sleep(180);
+        }
+        state.snapshot = Object.assign({}, state.snapshot, {
+          results: (state.snapshot.results || []).filter((item) => rowKey(item) !== key)
+        });
+        showOk('已删除：' + (r.name || key));
       } else {
-        showOk((act === 'disable' ? '禁用成功：' : '启用成功：') + (r.name || key));
+        state.snapshot = Object.assign({}, state.snapshot, {
+          results: (state.snapshot.results || []).map((item) => {
+            if (rowKey(item) !== key) return item;
+            const next = Object.assign({}, item, { disabled: act === 'disable' });
+            if (act === 'disable' && next.action === 'disable') next.action = 'keep';
+            if (act === 'enable' && next.action === 'enable') next.action = 'keep';
+            return next;
+          })
+        });
+        showOk((act === 'disable' ? '已禁用：' : '已启用：') + (r.name || key));
       }
-      render();
-    } catch (e) {
-      showErr(String(e.message || e));
-      await refresh();
-    } finally {
       pendingOps.delete(key);
       render();
+      // Background reconcile (errors only). Do not await in the click path.
+      void confirmRowOpInBackground(key, act, r.name || actionTargetName(r));
+    } catch (e) {
+      pendingOps.delete(key);
+      showErr(String(e.message || e));
+      await refresh();
     }
   }
   // 批量禁用：只针对当前分类下「已启用」的号；批量启用：只针对「已禁用」的号。
@@ -526,11 +559,18 @@ func renderUIPage(pluginID string) []byte {
     const stateHint = action === 'disable'
       ? '仅包含当前列表中状态为「已启用」的账号。'
       : (action === 'enable' ? '仅包含当前列表中状态为「已禁用」的账号。' : '包含当前分类下全部账号。');
-    const extra = action === 'delete'
-      ? '将删除 CPA Auth 凭证文件，并更新本地结果 JSON。此操作不可恢复。'
-      : (action === 'enable'
-        ? '将通过 CPA Management API 启用账号，并更新本地结果。'
-        : '将通过 CPA Management API 禁用账号，并更新本地结果。');
+    let extra = '';
+    if (action === 'delete') {
+      extra =
+        '将调用 CPA 本体批量删除接口（DELETE /auth-files，每批最多 50 个），并更新本地结果。\n' +
+        '此操作不可恢复。';
+    } else {
+      extra =
+        '将通过 CPA Management API ' + label + '账号，并更新本地结果。\n' +
+        '说明：CPA 本体没有批量启用/禁用接口，只能逐个调用 PATCH（插件侧会并发约 6 路），' +
+        '账号多时可能较慢，上方会显示进度。\n' +
+        '若需要更快清理，可改用「批量删除」（本体支持一次删多个）。';
+    }
     const ok = await confirmDialog(
       '批量' + label + '确认',
       '当前分类：' + filterLabel() + '\n' +
@@ -823,7 +863,9 @@ func renderUIPage(pluginID string) []byte {
     }
   }
   let pollTimer = null;
-  const POLL_MS = 1500;
+  const POLL_MS = 1200;
+  let lastJobBusy = false;
+  let lastResultsGen = 0;
   function stopPolling() {
     if (pollTimer != null) {
       clearInterval(pollTimer);
@@ -832,14 +874,24 @@ func renderUIPage(pluginID string) []byte {
   }
   function startPolling() {
     if (pollTimer != null) return;
-    pollTimer = setInterval(() => { refresh(); }, POLL_MS);
+    // Light polls omit results[] — progress only.
+    pollTimer = setInterval(() => { refresh({ light: true }); }, POLL_MS);
   }
   // Only poll while a server job is active; idle pages do not keep hitting /status.
   function syncPolling(snap) {
     if (snap && (snap.running || snap.applying)) startPolling();
     else stopPolling();
   }
-  async function refresh() {
+  function mergeLightStatus(data) {
+    const prev = state.snapshot || {};
+    // Keep local results during light poll; refresh meta/progress only.
+    state.snapshot = Object.assign({}, prev, data || {}, {
+      results: prev.results || [],
+      include_results: false
+    });
+  }
+  async function refresh(opts) {
+    const light = !!(opts && opts.light);
     if (!keyInput.value.trim()) {
       stopPolling();
       state.snapshot = { results: [], summary: {}, running: false, applying: false, done: 0, total: 0 };
@@ -849,9 +901,20 @@ func renderUIPage(pluginID string) []byte {
       return;
     }
     try {
-      const data = await api('/status', { method: 'GET' });
-      state.snapshot = data || {};
-      if (data.running) {
+      const path = light ? '/status?include_results=0' : '/status?include_results=1';
+      const data = await api(path, { method: 'GET' });
+      const busy = !!(data && (data.running || data.applying));
+      const wasBusy = lastJobBusy;
+      lastJobBusy = busy;
+
+      if (light) {
+        mergeLightStatus(data);
+      } else {
+        state.snapshot = data || {};
+        if (data && data.results_gen != null) lastResultsGen = Number(data.results_gen) || 0;
+      }
+
+      if (data && data.running) {
         $('includeDisabled').checked = !!data.include_disabled;
         $('onlyDisabled').checked = !!data.only_disabled;
         if (data.workers) $('workers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
@@ -862,6 +925,19 @@ func renderUIPage(pluginID string) []byte {
       }
       syncPolling(data);
       render();
+
+      // Job just finished → pull full results once (list may have changed a lot).
+      if (wasBusy && !busy) {
+        await refresh({ light: false });
+        return;
+      }
+      // Light poll saw a newer results_gen while idle → resync list.
+      if (light && !busy && data && data.results_gen != null) {
+        const gen = Number(data.results_gen) || 0;
+        if (gen && gen !== lastResultsGen) {
+          await refresh({ light: false });
+        }
+      }
     } catch (e) {
       showErr(String(e.message || e));
       // Keep polling only if we still believe a job is active.

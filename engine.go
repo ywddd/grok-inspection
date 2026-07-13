@@ -18,9 +18,15 @@ import (
 )
 
 const (
-	defaultWorkers = 6
-	minWorkers     = 1
-	maxWorkers     = 16
+	defaultWorkers      = 6
+	minWorkers          = 1
+	maxWorkers          = 16
+	defaultApplyWorkers = 6 // concurrent Management API calls for bulk enable/disable
+	maxApplyWorkers     = 8
+	applyPersistEvery   = 25 // persist every N bulk ops (not each) for speed
+	// CPA DELETE /auth-files supports multi-name in one request. 50 balances
+	// payload size, partial-failure reporting, and progress granularity.
+	deleteBatchSize = 50
 )
 
 type accountResult struct {
@@ -54,9 +60,12 @@ type jobSnapshot struct {
 	ApplyFailures   []string        `json:"apply_failures,omitempty"`
 	StartedAt       string          `json:"started_at,omitempty"`
 	FinishedAt      string          `json:"finished_at,omitempty"`
-	Results         []accountResult `json:"results"`
+	Results         []accountResult `json:"results,omitempty"`
 	Summary         map[string]int  `json:"summary"`
 	StorePath       string          `json:"store_path,omitempty"`
+	// ResultsGen bumps whenever results content changes; light status omits Results.
+	ResultsGen     uint64 `json:"results_gen"`
+	IncludeResults bool   `json:"include_results"`
 }
 
 type startRequest struct {
@@ -94,6 +103,7 @@ type inspectionEngine struct {
 	running         bool
 	stopped         bool
 	applying        bool
+	actionInFlight  int // concurrent single-row enable/disable/delete goroutines
 	incremental     bool
 	runID           uint64
 	workers         int
@@ -106,6 +116,7 @@ type inspectionEngine struct {
 	applyTotal      int
 	applyCurrent    string
 	applyFailures   []string
+	resultsGen      uint64 // monotonic; used by light /status clients
 	startedAt       time.Time
 	finishedAt      time.Time
 }
@@ -137,6 +148,7 @@ func (e *inspectionEngine) loadFromDisk() {
 		return
 	}
 	e.results = append([]accountResult(nil), snap.Results...)
+	e.bumpResultsLocked()
 	if snap.Workers >= minWorkers && snap.Workers <= maxWorkers {
 		e.workers = snap.Workers
 	}
@@ -178,10 +190,11 @@ func (e *inspectionEngine) persist() {
 	e.persistLocked()
 }
 
-func (e *inspectionEngine) snapshot() jobSnapshot {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	results := append([]accountResult(nil), e.results...)
+func (e *inspectionEngine) bumpResultsLocked() {
+	e.resultsGen++
+}
+
+func summarizeResults(results []accountResult) map[string]int {
 	summary := map[string]int{
 		"total":             len(results),
 		"healthy":           0,
@@ -204,6 +217,19 @@ func (e *inspectionEngine) snapshot() jobSnapshot {
 			summary["other"]++
 		}
 	}
+	return summary
+}
+
+// snapshot builds a status payload. When includeResults is false (light poll),
+// Results is omitted so progress polling stays cheap with 1000+ accounts.
+func (e *inspectionEngine) snapshot(includeResults bool) jobSnapshot {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.snapshotLocked(includeResults)
+}
+
+func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
+	summary := summarizeResults(e.results)
 	snap := jobSnapshot{
 		Running:         e.running,
 		Stopped:         e.stopped && !e.running,
@@ -218,9 +244,13 @@ func (e *inspectionEngine) snapshot() jobSnapshot {
 		ApplyTotal:      e.applyTotal,
 		ApplyCurrent:    e.applyCurrent,
 		ApplyFailures:   append([]string(nil), e.applyFailures...),
-		Results:         results,
 		Summary:         summary,
 		StorePath:       storeFilePath(),
+		ResultsGen:      e.resultsGen,
+		IncludeResults:  includeResults,
+	}
+	if includeResults {
+		snap.Results = append([]accountResult(nil), e.results...)
 	}
 	if !e.startedAt.IsZero() {
 		snap.StartedAt = e.startedAt.Format(time.RFC3339)
@@ -242,6 +272,10 @@ func (e *inspectionEngine) start(req startRequest) error {
 		e.mu.Unlock()
 		return fmt.Errorf("inspection already running")
 	}
+	if e.actionInFlight > 0 {
+		e.mu.Unlock()
+		return fmt.Errorf("busy: row action in progress")
+	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()
 		return fmt.Errorf("增量巡检需要已有结果，请先完整巡检")
@@ -260,6 +294,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.onlyDisabled = onlyDisabled
 	if !req.Incremental {
 		e.results = nil
+		e.bumpResultsLocked()
 	}
 	e.total = 0
 	e.probeDone = 0
@@ -311,6 +346,7 @@ func (e *inspectionEngine) appendResult(runID uint64, result accountResult) {
 	}
 	e.results = append(e.results, result)
 	e.probeDone++
+	e.bumpResultsLocked()
 	// Periodic flush so a crash mid-run still keeps partial progress.
 	if e.probeDone%10 == 0 {
 		e.persistLocked()
@@ -710,10 +746,43 @@ func callCPAManagementWithAuth(method, path string, body []byte, password string
 	return resp.StatusCode, raw, nil
 }
 
+// findAuthFromResults resolves an auth identity from the in-memory inspection
+// list without calling host.auth.list (which is O(n) over all CPA accounts).
+func findAuthFromResults(name string) *pluginapi.HostAuthFileEntry {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	for i := range engine.results {
+		item := &engine.results[i]
+		if item.AuthIndex == name || item.FileName == name || item.Name == name || item.Email == name {
+			fileName := firstNonEmpty(item.FileName, item.Name)
+			if fileName == "" {
+				return nil
+			}
+			return &pluginapi.HostAuthFileEntry{
+				AuthIndex: item.AuthIndex,
+				Name:      fileName,
+				ID:        firstNonEmpty(item.FileName, item.AuthIndex),
+				Email:     item.Email,
+				Disabled:  item.Disabled,
+			}
+		}
+	}
+	return nil
+}
+
 func findAuthFile(name string) (*pluginapi.HostAuthFileEntry, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("name is required")
+	}
+	// Fast path: after a full/incremental inspect we already know file names.
+	// Avoid listing 1000+ CPA auth files on every enable/disable/delete click.
+	if entry := findAuthFromResults(name); entry != nil {
+		return entry, nil
 	}
 	list, errList := callHostAuthList()
 	if errList != nil {
@@ -728,28 +797,15 @@ func findAuthFile(name string) (*pluginapi.HostAuthFileEntry, error) {
 	return nil, fmt.Errorf("auth not found: %s", name)
 }
 
-func verifyAuthDisabled(authIndex, name string, disabled bool) error {
-	list, errList := callHostAuthList()
-	if errList != nil {
-		return errList
-	}
-	for _, file := range list.Files {
-		if file.AuthIndex == authIndex || file.Name == name || file.ID == name || file.Email == name {
-			actual := file.Disabled || isDisabledEntry(file.Disabled, file.Status)
-			if actual != disabled {
-				return fmt.Errorf("CPA state verification failed for %s: disabled=%v, expected=%v", name, actual, disabled)
-			}
-			return nil
-		}
-	}
-	return fmt.Errorf("auth disappeared while verifying %s", name)
-}
-
 // setAuthDisabled toggles CPA auth via Management API PATCH /auth-files/status.
 // host.auth.save alone is NOT enough: CLIProxyAPI buildAuthFromFileData does not
 // promote JSON "disabled" onto Auth.Disabled, so the main UI stays enabled.
 // Must run outside management.handle (background goroutine) to avoid re-entry deadlock.
-func setAuthDisabled(name string, disabled bool, password string, headers http.Header) error {
+//
+// After a successful PATCH we trust CPA and update local results only — we do not
+// re-list all auth files (that was the main reason single-row ops felt slow).
+// persist=false is used by bulk apply so 1000 disk flushes do not dominate runtime.
+func setAuthDisabled(name string, disabled bool, password string, headers http.Header, persist bool) error {
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		return errTarget
@@ -768,9 +824,6 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 	if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, headers); errPatch != nil {
 		return errPatch
 	}
-	if errVerify := verifyAuthDisabled(target.AuthIndex, target.Name, disabled); errVerify != nil {
-		return errVerify
-	}
 	engine.mu.Lock()
 	for i := range engine.results {
 		item := &engine.results[i]
@@ -787,7 +840,10 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 			}
 		}
 	}
-	engine.persistLocked()
+	engine.bumpResultsLocked()
+	if persist {
+		engine.persistLocked()
+	}
 	engine.mu.Unlock()
 	return nil
 }
@@ -821,6 +877,7 @@ func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntr
 		kept = append(kept, item)
 	}
 	e.results = kept
+	e.bumpResultsLocked()
 	if !e.running {
 		e.total = len(e.results)
 	}
@@ -831,14 +888,16 @@ func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntr
 // It deletes the CPA Auth credential file AND removes the row from local JSON results.
 // password/headers come from the page Management Key (or env fallbacks) so third-party
 // installs work without MANAGEMENT_PASSWORD on the process.
-func deleteAuthFile(name string, password string, headers http.Header) error {
+func deleteAuthFile(name string, password string, headers http.Header, persist bool) error {
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		// Idempotent: already gone counts as success for delete recommendations.
 		if strings.Contains(errTarget.Error(), "auth not found") {
 			engine.mu.Lock()
 			engine.removeResultLocked(nil, name)
-			engine.persistLocked()
+			if persist {
+				engine.persistLocked()
+			}
 			engine.mu.Unlock()
 			return nil
 		}
@@ -850,40 +909,144 @@ func deleteAuthFile(name string, password string, headers http.Header) error {
 	}
 	path := "/v0/management/auth-files?name=" + url.QueryEscape(fileName)
 	if _, _, errDelete := callCPAManagementWithAuth(http.MethodDelete, path, nil, password, headers); errDelete != nil {
-		// Some CPA builds return 404 after concurrent deletes; re-check presence.
-		if list, errList := callHostAuthList(); errList == nil {
-			gone := true
-			for _, file := range list.Files {
-				if file.AuthIndex == target.AuthIndex || file.Name == target.Name || file.ID == target.ID {
-					gone = false
-					break
-				}
-			}
-			if gone {
-				engine.mu.Lock()
-				engine.removeResultLocked(target, name)
+		// Concurrent deletes / already-removed files often surface as 404 — treat as success.
+		msg := errDelete.Error()
+		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
+			engine.mu.Lock()
+			engine.removeResultLocked(target, name)
+			if persist {
 				engine.persistLocked()
-				engine.mu.Unlock()
-				return nil
 			}
+			engine.mu.Unlock()
+			return nil
 		}
 		return errDelete
 	}
-	list, errList := callHostAuthList()
-	if errList != nil {
-		return errList
-	}
-	for _, file := range list.Files {
-		if file.AuthIndex == target.AuthIndex || file.Name == target.Name || file.ID == target.ID {
-			return fmt.Errorf("CPA state verification failed: deleted auth still present as %s", file.Name)
-		}
-	}
-	// Auth gone → drop from live list + persist local JSON.
+	// Trust a successful DELETE; do not re-list all CPA auth files to verify.
 	engine.mu.Lock()
 	engine.removeResultLocked(target, name)
-	engine.persistLocked()
+	if persist {
+		engine.persistLocked()
+	}
 	engine.mu.Unlock()
 	return nil
+}
+
+// resolveDeleteFileName picks the CPA auth file name for management DELETE.
+func resolveDeleteFileName(item accountResult) string {
+	return firstNonEmpty(item.FileName, item.Name, item.AuthIndex, item.Email)
+}
+
+// deleteAuthFilesBatch deletes many auth files in one CPA Management API call.
+// Host supports: DELETE /v0/management/auth-files with body {"names":[...]} or multi ?name=.
+// Returns per-item failure messages (empty means all ok).
+func deleteAuthFilesBatch(items []accountResult, password string, headers http.Header, persist bool) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	type mapped struct {
+		item     accountResult
+		fileName string
+	}
+	mappedItems := make([]mapped, 0, len(items))
+	names := make([]string, 0, len(items))
+	failures := make([]string, 0)
+	seenName := map[string]struct{}{}
+	for _, item := range items {
+		fileName := resolveDeleteFileName(item)
+		if fileName == "" {
+			failures = append(failures, item.Name+": auth file name missing")
+			continue
+		}
+		// Skip duplicate physical names in the same batch (same file, multiple result rows).
+		if _, ok := seenName[fileName]; ok {
+			// Still drop matching local rows for this identity.
+			engine.mu.Lock()
+			engine.removeResultLocked(nil, firstNonEmpty(item.AuthIndex, item.FileName, item.Name, item.Email))
+			engine.mu.Unlock()
+			continue
+		}
+		seenName[fileName] = struct{}{}
+		mappedItems = append(mappedItems, mapped{item: item, fileName: fileName})
+		names = append(names, fileName)
+	}
+	if len(names) == 0 {
+		if persist {
+			engine.persist()
+		}
+		return failures
+	}
+
+	body, errMarshal := json.Marshal(map[string]any{"names": names})
+	if errMarshal != nil {
+		for _, m := range mappedItems {
+			failures = append(failures, m.item.Name+": "+errMarshal.Error())
+		}
+		return failures
+	}
+
+	status, raw, errDelete := callCPAManagementWithAuth(http.MethodDelete, "/v0/management/auth-files", body, password, headers)
+	if errDelete != nil {
+		// Whole batch failed (network / hard error). Mark all remaining names failed.
+		msg := errDelete.Error()
+		// If everything was already gone, treat as success.
+		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
+			engine.mu.Lock()
+			for _, m := range mappedItems {
+				engine.removeResultLocked(nil, firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email))
+			}
+			if persist {
+				engine.persistLocked()
+			}
+			engine.mu.Unlock()
+			return failures
+		}
+		for _, m := range mappedItems {
+			failures = append(failures, m.item.Name+": "+msg)
+		}
+		return failures
+	}
+
+	// Parse optional partial failure payload (HTTP 207 Multi-Status).
+	failedNames := map[string]string{}
+	if status == http.StatusMultiStatus || len(raw) > 0 {
+		var payload struct {
+			Status  string `json:"status"`
+			Failed  []struct {
+				Name  string `json:"name"`
+				Error string `json:"error"`
+			} `json:"failed"`
+			Files []string `json:"files"`
+		}
+		if err := json.Unmarshal(raw, &payload); err == nil {
+			for _, f := range payload.Failed {
+				name := strings.TrimSpace(f.Name)
+				if name == "" {
+					continue
+				}
+				errText := strings.TrimSpace(f.Error)
+				if errText == "" {
+					errText = "delete failed"
+				}
+				failedNames[name] = errText
+			}
+		}
+	}
+
+	engine.mu.Lock()
+	for _, m := range mappedItems {
+		if errText, ok := failedNames[m.fileName]; ok {
+			failures = append(failures, m.item.Name+": "+errText)
+			continue
+		}
+		engine.removeResultLocked(nil, firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email))
+	}
+	if persist {
+		engine.persistLocked()
+	}
+	engine.mu.Unlock()
+	_ = status
+	return failures
 }
 
 func stringSet(values []string) map[string]struct{} {
@@ -971,9 +1134,20 @@ func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult,
 
 // startApply runs recommended or forced bulk actions asynchronously.
 // password/headers are captured for background delete calls (page Management Key).
+func cloneHTTPHeader(src http.Header) http.Header {
+	if src == nil {
+		return nil
+	}
+	dst := make(http.Header, len(src))
+	for k, vals := range src {
+		dst[k] = append([]string(nil), vals...)
+	}
+	return dst
+}
+
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
 	e.mu.Lock()
-	if e.running || e.applying {
+	if e.running || e.applying || e.actionInFlight > 0 {
 		e.mu.Unlock()
 		return fmt.Errorf("busy")
 	}
@@ -994,6 +1168,9 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 	e.applyTotal = len(candidates)
 	e.applyCurrent = ""
 	e.applyFailures = nil
+	// Capture auth material for the background goroutine (request may free headers after return).
+	password = strings.TrimSpace(password)
+	headers = cloneHTTPHeader(headers)
 	e.mu.Unlock()
 
 	e.runWG.Add(1)
@@ -1005,7 +1182,8 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 }
 
 // startAction runs a single enable/disable/delete asynchronously.
-// Unlike bulk apply, it does not set applying=true so other list actions stay usable.
+// Unlike bulk apply, it does not set applying=true so other list rows stay clickable,
+// but actionInFlight blocks full inspect / bulk apply to avoid result races.
 func (e *inspectionEngine) startAction(req actionRequest, password string, headers http.Header) error {
 	name := firstNonEmpty(req.Name, req.AuthIndex)
 	if name == "" {
@@ -1020,26 +1198,38 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 		e.mu.Unlock()
 		return fmt.Errorf("busy: bulk apply in progress")
 	}
-	// Clear previous single-op failures so the UI poll can attribute new errors cleanly.
-	e.applyFailures = nil
+	e.actionInFlight++
+	password = strings.TrimSpace(password)
+	headers = cloneHTTPHeader(headers)
 	e.mu.Unlock()
 
 	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
-		// Brief yield so management.handle can finish before we re-enter Management HTTP.
-		time.Sleep(30 * time.Millisecond)
+		// Yield so management.handle can finish before we re-enter Management HTTP
+		// (avoids re-entry deadlock while keeping the UI path snappy).
+		time.Sleep(5 * time.Millisecond)
 		var errAction error
 		if req.Delete {
-			errAction = deleteAuthFile(name, password, headers)
+			errAction = deleteAuthFile(name, password, headers, true)
 		} else {
-			errAction = setAuthDisabled(name, req.Disabled, password, headers)
+			errAction = setAuthDisabled(name, req.Disabled, password, headers, true)
 		}
 		e.mu.Lock()
-		if errAction != nil {
-			e.applyFailures = []string{name + ": " + errAction.Error()}
+		e.actionInFlight--
+		if e.actionInFlight < 0 {
+			e.actionInFlight = 0
 		}
-		e.persistLocked()
+		if errAction != nil {
+			// Keep a short recent failure list; do not wipe other concurrent row failures.
+			msg := name + ": " + errAction.Error()
+			e.applyFailures = append([]string{msg}, e.applyFailures...)
+			if len(e.applyFailures) > 20 {
+				e.applyFailures = e.applyFailures[:20]
+			}
+			e.persistLocked()
+		}
+		// Success path already persisted inside setAuthDisabled/deleteAuthFile.
 		e.mu.Unlock()
 	}()
 	return nil
@@ -1054,30 +1244,94 @@ func (e *inspectionEngine) runApply(candidates []accountResult, password string,
 		e.mu.Unlock()
 	}()
 
-	failures := make([]string, 0)
+	// Split deletes (host batch API) from enable/disable (host single-item only).
+	deletes := make([]accountResult, 0)
+	others := make([]accountResult, 0)
 	for _, item := range candidates {
+		if item.Action == "delete" {
+			deletes = append(deletes, item)
+		} else {
+			others = append(others, item)
+		}
+	}
+
+	// --- Bulk delete via CPA multi-name DELETE (chunks of deleteBatchSize) ---
+	for i := 0; i < len(deletes); i += deleteBatchSize {
+		end := i + deleteBatchSize
+		if end > len(deletes) {
+			end = len(deletes)
+		}
+		chunk := deletes[i:end]
 		e.mu.Lock()
-		e.applyCurrent = item.Action + " " + item.Name
+		e.applyCurrent = fmt.Sprintf("delete batch %d-%d/%d", i+1, end, len(deletes))
 		e.mu.Unlock()
-		// Prefer physical auth file name so CPA Auth dir entry is deleted correctly.
-		targetName := firstNonEmpty(item.FileName, item.AuthIndex, item.Name, item.Email)
-		var errAction error
-		switch item.Action {
-		case "delete":
-			errAction = deleteAuthFile(targetName, password, headers)
-		case "disable":
-			errAction = setAuthDisabled(targetName, true, password, headers)
-		case "enable":
-			errAction = setAuthDisabled(targetName, false, password, headers)
-		default:
-			errAction = fmt.Errorf("unsupported action %q", item.Action)
-		}
+
+		batchFails := deleteAuthFilesBatch(chunk, password, headers, false)
 		e.mu.Lock()
-		if errAction != nil {
-			failures = append(failures, item.Name+": "+errAction.Error())
-			e.applyFailures = append([]string(nil), failures...)
+		if len(batchFails) > 0 {
+			e.applyFailures = append(e.applyFailures, batchFails...)
 		}
-		e.applyDone++
+		e.applyDone += len(chunk)
+		if e.applyDone%applyPersistEvery == 0 || end == len(deletes) {
+			e.persistLocked()
+		}
 		e.mu.Unlock()
 	}
+
+	// --- Enable/disable: no host batch API → concurrent single PATCH ---
+	if len(others) == 0 {
+		return
+	}
+	workers := defaultApplyWorkers
+	if workers > maxApplyWorkers {
+		workers = maxApplyWorkers
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > len(others) {
+		workers = len(others)
+	}
+
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
+	for _, item := range others {
+		item := item
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			e.mu.Lock()
+			e.applyCurrent = item.Action + " " + item.Name
+			e.mu.Unlock()
+
+			// Prefer physical auth file name so CPA Auth dir entry is deleted correctly.
+			targetName := firstNonEmpty(item.FileName, item.AuthIndex, item.Name, item.Email)
+			var errAction error
+			switch item.Action {
+			case "disable":
+				errAction = setAuthDisabled(targetName, true, password, headers, false)
+			case "enable":
+				errAction = setAuthDisabled(targetName, false, password, headers, false)
+			default:
+				errAction = fmt.Errorf("unsupported action %q", item.Action)
+			}
+
+			e.mu.Lock()
+			if errAction != nil {
+				e.applyFailures = append(e.applyFailures, item.Name+": "+errAction.Error())
+			}
+			e.applyDone++
+			done := e.applyDone
+			// Occasional flush during bulk — full persist only every N items + final defer.
+			if done%applyPersistEvery == 0 {
+				e.persistLocked()
+			}
+			e.mu.Unlock()
+		}()
+	}
+	wg.Wait()
 }

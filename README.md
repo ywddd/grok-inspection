@@ -112,8 +112,7 @@ git push origin v0.1.4
 
 ## 文档
 
-- [改动说明](docs/CHANGELOG-2026-07-13.md)
-- [PR 说明](docs/PR-feat-inspect-improvements.md)
+- [架构设计](docs/ARCHITECTURE.md)
 
 ## License
 

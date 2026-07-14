@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing release tag to build or repair
         required: true
-        default: v0.1.6
+        default: v0.1.9
 
 permissions:
   contents: write
@@ -25,6 +25,10 @@ jobs:
           - goos: linux
             goarch: amd64
             runner: ubuntu-latest
+            ext: so
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-24.04-arm
             ext: so
           - goos: darwin
             goarch: arm64

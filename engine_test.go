@@ -1,6 +1,7 @@
-package main
+﻿package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -410,3 +411,93 @@ func TestUpsertResultReplacesByAuthIndex(t *testing.T) {
 		t.Fatalf("probeDone=%d", e.probeDone)
 	}
 }
+
+func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldTLS := os.Getenv("CPA_TLS")
+	oldDefault := cpaManagementBaseURL
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		_ = os.Setenv("CPA_TLS", oldTLS)
+		cpaManagementBaseURL = oldDefault
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Unsetenv("PORT")
+	_ = os.Unsetenv("CPA_PORT")
+	_ = os.Setenv("CPA_TLS", "true")
+	cpaManagementBaseURL = "http://127.0.0.1:8317"
+
+	if got := resolveManagementBaseURL(nil); got != "https://127.0.0.1:8317" {
+		t.Fatalf("tls base url = %q", got)
+	}
+	_ = os.Setenv("PORT", "9443")
+	if got := resolveManagementBaseURL(nil); got != "https://127.0.0.1:9443" {
+		t.Fatalf("tls port base url = %q", got)
+	}
+}
+
+func TestCallCPAManagementRetriesHTTPSAfterPlainHTTPMismatch(t *testing.T) {
+	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer tls-pass" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer tlsServer.Close()
+
+	// Parse host:port from TLS server and build plain-http base that will fail protocol-wise.
+	u := strings.TrimPrefix(tlsServer.URL, "https://")
+	httpBase := "http://" + u
+
+	oldBaseURL := cpaManagementBaseURL
+	oldDo := cpaManagementDo
+	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
+	oldCPABase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	defer func() {
+		cpaManagementBaseURL = oldBaseURL
+		cpaManagementDo = oldDo
+		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword)
+		_ = os.Setenv("CPA_BASE_URL", oldCPABase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+	}()
+
+	// Force resolve to plain http against the TLS listener.
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", httpBase)
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "tls-pass")
+	// Use real client that accepts the test cert via InsecureSkipVerify in plugin client.
+	cpaManagementDo = cpaManagementClient.Do
+
+	status, _, err := callCPAManagement(http.MethodPatch, "/v0/management/auth-files/status", []byte(`{"disabled":true}`))
+	if err != nil {
+		t.Fatalf("expected https retry success, got err=%v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+}
+
+func TestShouldRetryManagementWithHTTPS(t *testing.T) {
+	if !shouldRetryManagementWithHTTPS("http://127.0.0.1:8317", fmt.Errorf(`Patch "http://127.0.0.1:8317/x": EOF`)) {
+		t.Fatal("expected retry on loopback EOF")
+	}
+	if shouldRetryManagementWithHTTPS("https://127.0.0.1:8317", fmt.Errorf("EOF")) {
+		t.Fatal("should not retry when already https")
+	}
+	if shouldRetryManagementWithHTTPS("http://example.com:8317", fmt.Errorf("EOF")) {
+		t.Fatal("should not retry non-loopback")
+	}
+}
+

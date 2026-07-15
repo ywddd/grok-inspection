@@ -1,10 +1,13 @@
-package main
+﻿package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -12,11 +15,56 @@ import (
 
 var (
 	cpaManagementBaseURL = "http://127.0.0.1:8317"
-	cpaManagementClient  = &http.Client{Timeout: 8 * time.Second}
+	cpaManagementClient  = newManagementHTTPClient()
 	cpaManagementDo      = func(req *http.Request) (*http.Response, error) {
 		return cpaManagementClient.Do(req)
 	}
 )
+
+func newManagementHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			// Avoid corporate/container HTTP_PROXY hijacking loopback management calls.
+			Proxy: loopbackAwareProxy,
+			// CPA local TLS often uses self-signed certs; management is key-protected.
+			TLSClientConfig: &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, //nolint:gosec // local/self-signed management endpoint
+			},
+		},
+	}
+}
+
+func loopbackAwareProxy(req *http.Request) (*url.URL, error) {
+	if req != nil && req.URL != nil && isLoopbackHost(req.URL.Hostname()) {
+		return nil, nil
+	}
+	return http.ProxyFromEnvironment(req)
+}
+
+func isLoopbackHost(host string) bool {
+	h := strings.TrimSpace(strings.ToLower(host))
+	if h == "" {
+		return false
+	}
+	if h == "localhost" || h == "127.0.0.1" || h == "::1" {
+		return true
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+func envTruthy(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
 
 func cpaManagementPassword() string {
 	return firstNonEmpty(os.Getenv("MANAGEMENT_PASSWORD"), os.Getenv("CPA_MANAGEMENT_KEY"))
@@ -67,6 +115,13 @@ func resolveManagementPassword(headers http.Header) string {
 	return strings.TrimSpace(cpaManagementPassword())
 }
 
+func managementTLSPreferred() bool {
+	return envTruthy(os.Getenv("CPA_TLS")) ||
+		envTruthy(os.Getenv("CPA_TLS_ENABLE")) ||
+		envTruthy(os.Getenv("TLS_ENABLE")) ||
+		envTruthy(os.Getenv("CPA_MANAGEMENT_TLS"))
+}
+
 func resolveManagementBaseURL(headers http.Header) string {
 	_ = headers
 	// Prefer explicit env. Never derive the management port from the browser Host
@@ -74,25 +129,72 @@ func resolveManagementBaseURL(headers http.Header) string {
 	if value := firstNonEmpty(os.Getenv("CPA_BASE_URL"), os.Getenv("CPA_MANAGEMENT_BASE_URL")); value != "" {
 		return strings.TrimRight(strings.TrimSpace(value), "/")
 	}
+	scheme := "http"
+	if managementTLSPreferred() {
+		scheme = "https"
+	}
 	if port := strings.TrimSpace(firstNonEmpty(os.Getenv("PORT"), os.Getenv("CPA_PORT"))); port != "" {
-		return "http://127.0.0.1:" + port
+		port = strings.TrimPrefix(port, ":")
+		return scheme + "://127.0.0.1:" + port
+	}
+	if scheme == "https" {
+		return "https://127.0.0.1:8317"
 	}
 	return strings.TrimRight(cpaManagementBaseURL, "/")
+}
+
+func isLikelyPlainHTTPAgainstTLS(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "eof") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "malformed http") ||
+		strings.Contains(s, "server gave http response to https") ||
+		strings.Contains(s, "first record does not look like") ||
+		strings.Contains(s, "tls:") ||
+		strings.Contains(s, "http2: ")
+}
+
+func shouldRetryManagementWithHTTPS(baseURL string, err error) bool {
+	if err == nil {
+		return false
+	}
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(baseURL)), "http://") {
+		return false
+	}
+	u, parseErr := url.Parse(baseURL)
+	if parseErr != nil || !isLoopbackHost(u.Hostname()) {
+		return false
+	}
+	return isLikelyPlainHTTPAgainstTLS(err)
+}
+
+func httpsManagementFallbackURL(baseURL string) string {
+	trimmed := strings.TrimSpace(baseURL)
+	if strings.HasPrefix(strings.ToLower(trimmed), "http://") {
+		return "https://" + trimmed[len("http://"):]
+	}
+	return ""
+}
+
+func annotateManagementDialError(baseURL string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if !isLikelyPlainHTTPAgainstTLS(err) {
+		return err
+	}
+	return fmt.Errorf("%w (if CPA TLS is enabled, set CPA_MANAGEMENT_BASE_URL=https://127.0.0.1:<port> or CPA_TLS=true)", err)
 }
 
 func callCPAManagement(method, path string, body []byte) (int, []byte, error) {
 	return callCPAManagementWithAuth(method, path, body, "", nil)
 }
 
-func callCPAManagementWithAuth(method, path string, body []byte, password string, headers http.Header) (int, []byte, error) {
-	password = strings.TrimSpace(password)
-	if password == "" {
-		password = resolveManagementPassword(headers)
-	}
-	if password == "" {
-		return 0, nil, fmt.Errorf("CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)")
-	}
-	baseURL := resolveManagementBaseURL(headers)
+func executeManagementRequest(method, baseURL, path string, body []byte, password string) (int, []byte, error) {
 	req, errRequest := http.NewRequest(method, strings.TrimRight(baseURL, "/")+path, bytes.NewReader(body))
 	if errRequest != nil {
 		return 0, nil, errRequest
@@ -115,6 +217,31 @@ func callCPAManagementWithAuth(method, path string, body []byte, password string
 		return resp.StatusCode, raw, fmt.Errorf("CPA management API returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
 	return resp.StatusCode, raw, nil
+}
+
+func callCPAManagementWithAuth(method, path string, body []byte, password string, headers http.Header) (int, []byte, error) {
+	password = strings.TrimSpace(password)
+	if password == "" {
+		password = resolveManagementPassword(headers)
+	}
+	if password == "" {
+		return 0, nil, fmt.Errorf("CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)")
+	}
+	baseURL := resolveManagementBaseURL(headers)
+	status, raw, err := executeManagementRequest(method, baseURL, path, body, password)
+	if err != nil && shouldRetryManagementWithHTTPS(baseURL, err) {
+		if alt := httpsManagementFallbackURL(baseURL); alt != "" {
+			status2, raw2, err2 := executeManagementRequest(method, alt, path, body, password)
+			if err2 == nil {
+				return status2, raw2, nil
+			}
+			return 0, nil, fmt.Errorf("%v; HTTPS retry failed: %w (set CPA_MANAGEMENT_BASE_URL=https://127.0.0.1:<port> when CPA TLS is on)", err, err2)
+		}
+	}
+	if err != nil {
+		return 0, nil, annotateManagementDialError(baseURL, err)
+	}
+	return status, raw, nil
 }
 
 // findAuthFromResults resolves an auth identity from the in-memory inspection

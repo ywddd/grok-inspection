@@ -1,10 +1,10 @@
-# Grok Inspection
+﻿# Grok Inspection
 
 > **中文** | [English](README.en.md)
 
 CPA（CLIProxyAPI）插件：批量检测 xAI / Grok 账号健康状态，并给出禁用 / 启用 / 删除建议。
 
-版本：`0.1.9` · 菜单：**Grok 账号巡检**
+版本：`0.1.10` · 菜单：**Grok 账号巡检**
 
 ## 功能
 

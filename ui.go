@@ -53,10 +53,16 @@ func renderUIPage(pluginID string) []byte {
     .modal-actions { display:flex; justify-content:flex-end; gap:8px; }
     .modal-actions button { min-width:76px; }
     .table-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; box-shadow:0 1px 2px rgba(15,23,42,.04); }
-    table { width:100%%; border-collapse:collapse; min-width:980px; font-size:13px; }
-    th { padding:10px 12px; border-bottom:1px solid #e2e8f0; text-align:left; background:linear-gradient(180deg,#f8fafc 0%%,#f1f5f9 100%%); color:#475569; font-size:12px; }
-    td { padding:10px 12px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
-    .pill { display:inline-flex; align-items:center; height:22px; padding:0 8px; border-radius:999px; font-size:12px; font-weight:650; }
+    table { width:100%%; border-collapse:collapse; min-width:1100px; font-size:13px; table-layout:auto; }
+    th { padding:10px 12px; border-bottom:1px solid #e2e8f0; text-align:left; background:linear-gradient(180deg,#f8fafc 0%%,#f1f5f9 100%%); color:#475569; font-size:12px; white-space:nowrap; }
+    td { padding:10px 12px; border-bottom:1px solid #f1f5f9; vertical-align:middle; }
+    td.col-reason { vertical-align:top; word-break:break-word; overflow-wrap:anywhere; }
+    th.col-status, td.col-status, th.col-result, td.col-result { white-space:nowrap; width:1%%; min-width:88px; }
+    th.col-http, td.col-http { white-space:nowrap; width:1%%; min-width:56px; text-align:center; }
+    th.col-model, td.col-model { white-space:nowrap; min-width:72px; }
+    th.col-action, td.col-action { white-space:nowrap; min-width:72px; }
+    th.col-ops, td.col-ops { white-space:nowrap; width:1%%; min-width:120px; }
+    .pill { display:inline-flex; align-items:center; height:22px; padding:0 10px; border-radius:999px; font-size:12px; font-weight:650; white-space:nowrap; flex-shrink:0; line-height:22px; max-width:none; }
     .empty { padding:48px 20px; text-align:center; color:#64748b; }
     .pager { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:10px 12px; border-top:1px solid #e2e8f0; background:#fbfdff; align-items:center; }
     .err { color:#b91c1c; white-space:pre-wrap; }
@@ -159,7 +165,7 @@ func renderUIPage(pluginID string) []byte {
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
         <h1>Grok 账号巡检</h1>
-        <p class="sub">完整巡检清空并重测；增量巡检只测新增账号；点上方分类卡片后可「巡检当前分类」只重测该分类。结果落盘，批量操作按当前筛选。</p>
+        <p class="sub">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
       </div>
       <div class="controls">
         <div class="key-row" id="keyRow">
@@ -205,7 +211,7 @@ func renderUIPage(pluginID string) []byte {
         <table>
           <thead>
             <tr>
-              <th>账号</th><th>当前状态</th><th>检测结果</th><th>HTTP</th><th>模型</th><th>建议</th><th>原因</th><th>操作</th>
+              <th>账号</th><th class="col-status">当前状态</th><th class="col-result">检测结果</th><th class="col-http">HTTP</th><th class="col-model">模型</th><th class="col-action">建议</th><th class="col-reason">原因</th><th class="col-ops">操作</th>
             </tr>
           </thead>
           <tbody id="rows"></tbody>
@@ -493,7 +499,7 @@ func renderUIPage(pluginID string) []byte {
       } else if (mode === 'filter') {
         const classes = classificationsForFilter(state.filter);
         if (!classes.length) {
-          showErr('请先点击上方卡片选择一个分类，再巡检当前分类');
+          showErr('请先点击分类卡片选择一个分类，再巡检当前分类');
           return;
         }
         const count = filtered().length;
@@ -856,14 +862,14 @@ func renderUIPage(pluginID string) []byte {
             '</div>'
           : '-';
         return '<tr data-key="' + escapeHtml(key) + '"' + (busy ? ' class="row-busy"' : '') + '>' +
-          '<td>' + escapeHtml(r.name) + '</td>' +
-          '<td>' + pill(r.disabled ? '已禁用' : '已启用', r.disabled ? '#b45309' : '#047857') + '</td>' +
-          '<td>' + pill(classLabel[r.classification] || r.classification || '-', color[r.classification] || '#475569') + '</td>' +
-          '<td>' + (r.http_status || '-') + '</td>' +
-          '<td>' + escapeHtml(r.model || '-') + '</td>' +
-          '<td>' + (actionLabel[r.action] || r.action || '-') + '</td>' +
-          '<td>' + escapeHtml(r.reason || r.error_message || '-') + '</td>' +
-          '<td>' + actionBtns + '</td>' +
+          '<td class="col-name">' + escapeHtml(r.name) + '</td>' +
+          '<td class="col-status">' + pill(r.disabled ? '已禁用' : '已启用', r.disabled ? '#b45309' : '#047857') + '</td>' +
+          '<td class="col-result">' + pill(classLabel[r.classification] || r.classification || '-', color[r.classification] || '#475569') + '</td>' +
+          '<td class="col-http">' + (r.http_status || '-') + '</td>' +
+          '<td class="col-model">' + escapeHtml(r.model || '-') + '</td>' +
+          '<td class="col-action">' + (actionLabel[r.action] || r.action || '-') + '</td>' +
+          '<td class="col-reason">' + escapeHtml(r.reason || r.error_message || '-') + '</td>' +
+          '<td class="col-ops">' + actionBtns + '</td>' +
         '</tr>';
       }).join('');
       tbody.querySelectorAll('tr[data-key]').forEach((tr) => {
@@ -957,8 +963,11 @@ func renderUIPage(pluginID string) []byte {
   }
   let pollTimer = null;
   const POLL_MS = 1200;
+  const LIVE_RESULTS_MS = 2400;
   let lastJobBusy = false;
   let lastResultsGen = 0;
+  let lastFullResultsAt = 0;
+  let fullResultsSyncing = false;
   function stopPolling() {
     if (pollTimer != null) {
       clearInterval(pollTimer);
@@ -983,6 +992,18 @@ func renderUIPage(pluginID string) []byte {
       include_results: false
     });
   }
+  async function syncFullResults(force) {
+    if (fullResultsSyncing) return false;
+    if (!force && Date.now() - lastFullResultsAt < LIVE_RESULTS_MS) return false;
+    fullResultsSyncing = true;
+    try {
+      await refresh({ light: false });
+      return true;
+    } finally {
+      lastFullResultsAt = Date.now();
+      fullResultsSyncing = false;
+    }
+  }
   async function refresh(opts) {
     const light = !!(opts && opts.light);
     if (!keyInput.value.trim()) {
@@ -1005,6 +1026,7 @@ func renderUIPage(pluginID string) []byte {
       } else {
         state.snapshot = data || {};
         if (data && data.results_gen != null) lastResultsGen = Number(data.results_gen) || 0;
+        lastFullResultsAt = Date.now();
       }
 
       if (data && data.running) {
@@ -1021,14 +1043,16 @@ func renderUIPage(pluginID string) []byte {
 
       // Job just finished → pull full results once (list may have changed a lot).
       if (wasBusy && !busy) {
-        await refresh({ light: false });
+        await syncFullResults(true);
         return;
       }
-      // Light poll saw a newer results_gen while idle → resync list.
-      if (light && !busy && data && data.results_gen != null) {
+      // Keep the account table live during inspection without sending the full
+      // 1000+ row payload on every progress poll.
+      if (light && data && data.results_gen != null) {
         const gen = Number(data.results_gen) || 0;
         if (gen && gen !== lastResultsGen) {
-          await refresh({ light: false });
+          const synced = await syncFullResults(!busy);
+          if (synced) return;
         }
       }
     } catch (e) {

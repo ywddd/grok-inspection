@@ -81,6 +81,16 @@ func TestResourcePageDoesNotPollWithoutManagementKey(t *testing.T) {
 	if !strings.Contains(page, `include_results=0`) || !strings.Contains(page, `refresh({ light: true })`) {
 		t.Fatal("page should light-poll /status without full results during jobs")
 	}
+	for _, marker := range []string{
+		`const LIVE_RESULTS_MS = 2400`,
+		`async function syncFullResults(force)`,
+		`gen !== lastResultsGen`,
+		`await syncFullResults(!busy)`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("page missing live result synchronization marker %q", marker)
+		}
+	}
 }
 
 func TestResourcePageHasMobileScopedHostThemeStyles(t *testing.T) {

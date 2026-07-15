@@ -36,6 +36,17 @@ type scheduleRuntime struct {
 	LastRunStatus    string   `json:"last_run_status,omitempty"`
 	LastSkipReason   string   `json:"last_skip_reason,omitempty"`
 	LastAutoFailures []string `json:"last_auto_failures,omitempty"`
+	// Successful auto-action counts from the last timed run (not attempted).
+	LastAutoDeleted  int `json:"last_auto_deleted"`
+	LastAutoDisabled int `json:"last_auto_disabled"`
+	LastAutoEnabled  int `json:"last_auto_enabled"`
+}
+
+// autoActionCounts is the success tally for one timed auto-dispose pass.
+type autoActionCounts struct {
+	Deleted  int
+	Disabled int
+	Enabled  int
 }
 
 // scheduleView is returned by GET /schedule.

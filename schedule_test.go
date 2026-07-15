@@ -266,4 +266,29 @@ func TestRunAutoActionsSkipsWithoutPassword(t *testing.T) {
 	if view.LastRunStatus != "auto_failed_auth" {
 		t.Fatalf("status = %q", view.LastRunStatus)
 	}
+	if view.LastAutoDeleted != 0 || view.LastAutoDisabled != 0 || view.LastAutoEnabled != 0 {
+		t.Fatalf("counts should be zero on auth fail: %+v", view)
+	}
+}
+
+func TestRecordFinishedStoresAutoCounts(t *testing.T) {
+	old := scheduler
+	scheduler = &inspectionScheduler{cfg: defaultScheduleConfig()}
+	t.Cleanup(func() { scheduler = old })
+
+	scheduler.recordFinished("ok", nil, autoActionCounts{Deleted: 2, Disabled: 3, Enabled: 1})
+	view := scheduler.view()
+	if view.LastAutoDeleted != 2 || view.LastAutoDisabled != 3 || view.LastAutoEnabled != 1 {
+		t.Fatalf("view counts = del=%d dis=%d en=%d", view.LastAutoDeleted, view.LastAutoDisabled, view.LastAutoEnabled)
+	}
+	if !strings.Contains(string(mustJSON(view)), `"last_auto_deleted":2`) {
+		t.Fatalf("json missing counts: %s", string(mustJSON(view)))
+	}
+}
+
+func TestResourcePageShowsAutoCountsInMeta(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, "last_auto_deleted") || !strings.Contains(page, "自动处置 删除") {
+		t.Fatal("schedule meta should render auto action counts")
+	}
 }

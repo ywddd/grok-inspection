@@ -467,7 +467,7 @@ func (e *inspectionEngine) abortRunLocked() {
 	e.runID++
 	if wasScheduled {
 		// Notify outside lock would be safer; scheduler.recordFinished only takes its own lock.
-		go scheduler.recordFinished("inspect_stopped", nil)
+		go scheduler.recordFinished("inspect_stopped", nil, autoActionCounts{})
 	}
 }
 

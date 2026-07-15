@@ -4,7 +4,7 @@
 
 CPA (CLIProxyAPI) plugin for bulk xAI/Grok account health checks, with suggested disable / enable / delete actions.
 
-Version: `0.2.0` · Menu: **Grok Account Inspection**
+Version: `0.2.1` · Menu: **Grok Account Inspection**
 
 ## Features
 

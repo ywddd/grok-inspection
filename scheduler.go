@@ -108,6 +108,9 @@ func (s *inspectionScheduler) onTick() {
 	s.runtime.LastRunStatus = "running"
 	s.runtime.LastSkipReason = ""
 	s.runtime.LastAutoFailures = nil
+	s.runtime.LastAutoDeleted = 0
+	s.runtime.LastAutoDisabled = 0
+	s.runtime.LastAutoEnabled = 0
 	s.refreshNextLocked()
 	s.mu.Unlock()
 }
@@ -118,10 +121,14 @@ func (s *inspectionScheduler) recordSkip(status, reason string) {
 	s.runtime.LastRunAt = formatTimeRFC3339(time.Now())
 	s.runtime.LastRunStatus = status
 	s.runtime.LastSkipReason = reason
+	s.runtime.LastAutoDeleted = 0
+	s.runtime.LastAutoDisabled = 0
+	s.runtime.LastAutoEnabled = 0
+	s.runtime.LastAutoFailures = nil
 	s.refreshNextLocked()
 }
 
-func (s *inspectionScheduler) recordFinished(status string, failures []string) {
+func (s *inspectionScheduler) recordFinished(status string, failures []string, counts autoActionCounts) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtime.LastRunStatus = status
@@ -134,6 +141,9 @@ func (s *inspectionScheduler) recordFinished(status string, failures []string) {
 		failures = append([]string(nil), failures...)
 	}
 	s.runtime.LastAutoFailures = failures
+	s.runtime.LastAutoDeleted = counts.Deleted
+	s.runtime.LastAutoDisabled = counts.Disabled
+	s.runtime.LastAutoEnabled = counts.Enabled
 	s.refreshNextLocked()
 }
 

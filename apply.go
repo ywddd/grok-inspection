@@ -505,19 +505,19 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 	needAction := cfg.AutoDeletePermissionDenied || cfg.AutoDisableQuotaExhausted || cfg.AutoEnableHealthyDisabled
 	if !needAction {
-		scheduler.recordFinished("ok", nil)
+		scheduler.recordFinished("ok", nil, autoActionCounts{})
 		return
 	}
 	password := strings.TrimSpace(cpaManagementPassword())
 	if password == "" {
-		scheduler.recordFinished("auto_failed_auth", []string{"CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)"})
+		scheduler.recordFinished("auto_failed_auth", []string{"CPA management password is unavailable (set MANAGEMENT_PASSWORD on CPA process)"}, autoActionCounts{})
 		return
 	}
 
 	e.mu.Lock()
 	if e.running || e.applying || e.actionInFlight > 0 {
 		e.mu.Unlock()
-		scheduler.recordFinished("skipped_busy", nil)
+		scheduler.recordFinished("skipped_busy", nil, autoActionCounts{})
 		return
 	}
 	results := append([]accountResult(nil), e.results...)
@@ -542,7 +542,7 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 	total := len(disableTargets) + len(enableTargets) + len(deleteTargets)
 	if total == 0 {
 		e.mu.Unlock()
-		scheduler.recordFinished("ok", nil)
+		scheduler.recordFinished("ok", nil, autoActionCounts{})
 		return
 	}
 	e.applying = true
@@ -553,6 +553,7 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 	e.mu.Unlock()
 
 	var failures []string
+	var counts autoActionCounts
 	// disable → enable → delete
 	for _, item := range disableTargets {
 		targetName := firstNonEmpty(item.FileName, item.AuthIndex, item.Name, item.Email)
@@ -561,6 +562,8 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 		e.mu.Unlock()
 		if errAction := setAuthDisabled(targetName, true, password, nil, false); errAction != nil {
 			failures = append(failures, item.Name+": "+errAction.Error())
+		} else {
+			counts.Disabled++
 		}
 		e.mu.Lock()
 		e.applyDone++
@@ -573,6 +576,8 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 		e.mu.Unlock()
 		if errAction := setAuthDisabled(targetName, false, password, nil, false); errAction != nil {
 			failures = append(failures, item.Name+": "+errAction.Error())
+		} else {
+			counts.Enabled++
 		}
 		e.mu.Lock()
 		e.applyDone++
@@ -592,6 +597,11 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 			if len(batchFails) > 0 {
 				failures = append(failures, batchFails...)
 			}
+			ok := len(chunk) - len(batchFails)
+			if ok < 0 {
+				ok = 0
+			}
+			counts.Deleted += ok
 			e.mu.Lock()
 			e.applyDone += len(chunk)
 			e.mu.Unlock()
@@ -614,7 +624,7 @@ func (e *inspectionEngine) runAutoActionsAfterScheduled(cfg scheduleConfig) {
 	if len(failures) > 0 {
 		status = "auto_partial"
 	}
-	scheduler.recordFinished(status, failures)
+	scheduler.recordFinished(status, failures, counts)
 }
 
 func (e *inspectionEngine) runApply(candidates []accountResult, password string, headers http.Header) {

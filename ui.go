@@ -852,6 +852,12 @@ func renderUIPage(pluginID string) []byte {
     if (sched.last_run_at) parts.push('上次 ' + sched.last_run_at);
     if (sched.last_run_status) parts.push('状态 ' + sched.last_run_status);
     if (sched.last_skip_reason) parts.push('原因 ' + sched.last_skip_reason);
+    const delN = Number(sched.last_auto_deleted) || 0;
+    const disN = Number(sched.last_auto_disabled) || 0;
+    const enN = Number(sched.last_auto_enabled) || 0;
+    if (delN || disN || enN) {
+      parts.push('自动处置 删除' + delN + '/禁用' + disN + '/启用' + enN);
+    }
     if ((sched.last_auto_failures || []).length) parts.push('自动处置失败 ' + sched.last_auto_failures.length + ' 条');
     $('schedMeta').textContent = parts.join(' · ');
   }

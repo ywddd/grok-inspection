@@ -58,6 +58,14 @@ docker restart <容器名>
 
 删除 / 禁用账号时，会使用页面里填写的 CPA Management Key。
 
+插件默认通过本机回环地址调用 CPA Management API。在 Docker、端口映射或自定义监听端口环境中，如果插件无法访问实际管理端口，请在 CPA 进程中显式设置：
+
+```bash
+CPA_MANAGEMENT_BASE_URL=http://127.0.0.1:<实际端口>
+```
+
+启用 TLS 时使用 `https://`。显式配置后，请求失败也不会回退到浏览器请求的 Origin。
+
 ## 使用
 
 1. 打开 **Grok 账号巡检**。
@@ -98,4 +106,3 @@ MIT
 ## 社区
 
 本开源项目与 LINUX DO 社区相关联，并致谢该社区。
-

@@ -58,6 +58,14 @@ docker restart <container>
 
 Disable and delete actions use the CPA Management Key entered on the page.
 
+The plugin calls the CPA Management API through loopback by default. For Docker, port-mapped, or custom-listen-port deployments where the plugin cannot reach the actual management port, set this explicitly on the CPA process:
+
+```bash
+CPA_MANAGEMENT_BASE_URL=http://127.0.0.1:<actual-port>
+```
+
+Use `https://` when TLS is enabled. With an explicit value, a failed request will not fall back to the browser request Origin.
+
 ## Usage
 
 1. Open **Grok Account Inspection**.
@@ -98,4 +106,3 @@ MIT
 ## Community
 
 This open-source project is linked with and acknowledges the LINUX DO community.
-

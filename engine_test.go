@@ -1,11 +1,13 @@
-﻿package main
+package main
 
 import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,7 +98,7 @@ func TestCallCPAManagementWithAuthUsesRequestPasswordWithoutEnv(t *testing.T) {
 	}
 }
 
-func TestResolveManagementBaseURLIgnoresRequestHostPort(t *testing.T) {
+func TestResolveManagementBaseURLIgnoresRequestHeadersByDefault(t *testing.T) {
 	oldBase := os.Getenv("CPA_BASE_URL")
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
@@ -115,14 +117,217 @@ func TestResolveManagementBaseURLIgnoresRequestHostPort(t *testing.T) {
 	_ = os.Unsetenv("CPA_PORT")
 	cpaManagementBaseURL = "http://127.0.0.1:8317"
 
-	headers := http.Header{"Host": []string{"cpa.example.com:1109"}}
+	headers := http.Header{
+		"Origin":            []string{"https://attacker.example"},
+		"X-Forwarded-Proto": []string{"https"},
+		"X-Forwarded-Host":  []string{"attacker.example"},
+		"Host":              []string{"attacker.example"},
+	}
 	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:8317" {
-		t.Fatalf("base url = %q, want default local management port", got)
+		t.Fatalf("base url = %q, want local management default", got)
 	}
 
-	_ = os.Setenv("CPA_BASE_URL", "http://127.0.0.1:9999")
+	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", "http://127.0.0.1:9999")
 	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:9999" {
 		t.Fatalf("env base url = %q", got)
+	}
+}
+
+func TestNormalizeHTTPOriginRejectsNonOriginValues(t *testing.T) {
+	tests := map[string]string{
+		"https://cpa.example.com:1109":         "https://cpa.example.com:1109",
+		"https://cpa.example.com/":             "https://cpa.example.com",
+		"https://user@cpa.example.com":         "",
+		"https://cpa.example.com/management":   "",
+		"https://cpa.example.com?next=x":       "",
+		"https://cpa.example.com?":             "",
+		"https://cpa.example.com#fragment":     "",
+		"https://a.example, https://b.example": "",
+		"file:///tmp/cpa":                      "",
+		"null":                                 "",
+	}
+	for input, want := range tests {
+		if got := normalizeHTTPOrigin(input); got != want {
+			t.Fatalf("normalizeHTTPOrigin(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestCallCPAManagementRetriesOriginAfterUnreachablePORT(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer page-password" {
+			t.Fatalf("authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDo := cpaManagementDo
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		cpaManagementDo = oldDo
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Setenv("PORT", "65530")
+	_ = os.Unsetenv("CPA_PORT")
+	var calls []string
+	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.URL.String())
+		if req.URL.Host == "127.0.0.1:65530" {
+			return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
+		}
+		return server.Client().Do(req)
+	}
+
+	status, _, err := callCPAManagementWithAuth(
+		http.MethodPatch,
+		"/v0/management/auth-files/status",
+		[]byte(`{"disabled":true}`),
+		"page-password",
+		http.Header{"Origin": []string{server.URL}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if len(calls) != 2 || !strings.HasPrefix(calls[0], "http://127.0.0.1:65530/") || !strings.HasPrefix(calls[1], server.URL+"/") {
+		t.Fatalf("unexpected retry order: %#v", calls)
+	}
+}
+
+func TestCallCPAManagementDoesNotLeakKeyToOriginWhenEnvConfigured(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldDo := cpaManagementDo
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		cpaManagementDo = oldDo
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", "http://127.0.0.1:65531")
+	var calls []string
+	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.URL.String())
+		return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
+	}
+
+	_, _, err := callCPAManagementWithAuth(
+		http.MethodDelete,
+		"/v0/management/auth-files",
+		nil,
+		"page-password",
+		http.Header{"Origin": []string{"https://attacker.example"}},
+	)
+	if err == nil {
+		t.Fatal("expected configured management endpoint failure")
+	}
+	if len(calls) != 1 || !strings.HasPrefix(calls[0], "http://127.0.0.1:65531/") {
+		t.Fatalf("configured endpoint should not fall back to Origin: %#v", calls)
+	}
+}
+
+func TestCallCPAManagementDoesNotRetryForwardedOrHostHeaders(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDo := cpaManagementDo
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		cpaManagementDo = oldDo
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Setenv("PORT", "65530")
+	_ = os.Unsetenv("CPA_PORT")
+	var calls []string
+	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+		calls = append(calls, req.URL.String())
+		return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
+	}
+
+	_, _, err := callCPAManagementWithAuth(
+		http.MethodDelete,
+		"/v0/management/auth-files",
+		nil,
+		"page-password",
+		http.Header{
+			"X-Forwarded-Proto": []string{"https"},
+			"X-Forwarded-Host":  []string{"attacker.example"},
+			"Host":              []string{"attacker.example"},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected local management endpoint failure")
+	}
+	if len(calls) != 1 || !strings.HasPrefix(calls[0], "http://127.0.0.1:65530/") {
+		t.Fatalf("untrusted forwarded/host headers must not be retried: %#v", calls)
+	}
+}
+
+func TestCallCPAManagementDoesNotRetryOriginAfterHTTPError(t *testing.T) {
+	localCalls := 0
+	originCalls := 0
+	local := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		localCalls++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer local.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		originCalls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDefault := cpaManagementBaseURL
+	oldDo := cpaManagementDo
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		cpaManagementBaseURL = oldDefault
+		cpaManagementDo = oldDo
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Unsetenv("PORT")
+	_ = os.Unsetenv("CPA_PORT")
+	cpaManagementBaseURL = local.URL
+	cpaManagementDo = local.Client().Do
+
+	_, _, err := callCPAManagementWithAuth(
+		http.MethodPatch,
+		"/v0/management/auth-files/status",
+		[]byte(`{"disabled":true}`),
+		"page-password",
+		http.Header{"Origin": []string{origin.URL}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("expected local HTTP 401, got %v", err)
+	}
+	if localCalls != 1 || originCalls != 0 {
+		t.Fatalf("HTTP errors must not retry Origin: local=%d origin=%d", localCalls, originCalls)
 	}
 }
 
@@ -289,7 +494,6 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	}
 	engine.runWG.Wait()
 }
-
 
 func TestClassifyScopedStartRequiresExistingResults(t *testing.T) {
 	e := &inspectionEngine{workers: defaultWorkers}
@@ -500,4 +704,3 @@ func TestShouldRetryManagementWithHTTPS(t *testing.T) {
 		t.Fatal("should not retry non-loopback")
 	}
 }
-

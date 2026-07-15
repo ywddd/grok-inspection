@@ -64,25 +64,27 @@ Full inspection clears previous results. Incremental inspection keeps existing r
 
 ## Grok Probe
 
-The probe selects a model from:
+Each inspection run uses a fixed free-tier probe model (no per-account `/v1/models`):
 
 ```text
-GET https://cli-chat-proxy.grok.com/v1/models
+model = grok-4.5  # free accounts are remapped upstream to grok-4.5-build-free
 ```
 
-Then it tests the account with:
+Each host HTTP call has a 25s timeout with one timeout-only retry (short backoff). A whole account probe hard-caps at ~55s so one hung upstream cannot stall the job forever.
+
+Every account is tested with:
 
 ```text
 POST https://cli-chat-proxy.grok.com/v1/responses
 ```
 
-If the main probe receives common auth, quota, or permission errors, it also checks:
+Fallback is used only when the primary result is **ambiguous** (temporary 429, 5xx, unknown, model unavailable, etc.):
 
 ```text
 POST https://cli-chat-proxy.grok.com/v1/chat/completions
 ```
 
-Explicit authentication, quota, and permission failures from the primary `/responses` probe remain authoritative if the fallback returns a conflicting success. This avoids classifying an exhausted account as healthy because the two upstream endpoints briefly disagree.
+Definitive primary results skip fallback: `healthy`, `quota_exhausted` (free-usage only), `permission_denied`, `reauth`. When both are tried, free-usage / permission / reauth from primary remain authoritative if fallback returns success.
 
 The probe classifies HTTP status and structured error fields. It does not rely on natural-language model output.
 
@@ -92,7 +94,7 @@ The probe classifies HTTP status and structured error fields. It does not rely o
 |----------------|----------------|-------------|
 | `healthy` | `keep`, or `enable` if currently disabled | Probe returned 2xx |
 | `permission_denied` | `disable`, or `keep` if already disabled | 402/403 or permission/banned/suspended text |
-| `quota_exhausted` | `disable`, or `keep` if already disabled | 429 or quota/limit exhausted text |
+| `quota_exhausted` | `disable`, or `keep` if already disabled | Only Grok free-usage body/code (`subscription:free-usage-exhausted`, `free-usage-exhausted`, included free usage exhausted). Bare HTTP 429 is **not** quota |
 | `reauth` | `delete` | 401 or expired/invalid token text |
 | `model_unavailable` | `keep` | 404 or model unavailable text |
 | `probe_error` | `keep` | Request, decode, or unexpected probe failure |
@@ -127,4 +129,8 @@ The persisted file contains display-oriented result data only. It does not store
 
 Inspection worker count is user-configurable and validated by the engine. Bulk operations also run asynchronously with bounded concurrency for enable/disable and batched deletes.
 
-The engine keeps all mutable state behind a mutex and exposes snapshots to the UI. Status requests must stay cheap and must not trigger host calls or upstream probes.
+The engine keeps all mutable state behind a mutex and exposes snapshots to the UI. Status requests must stay cheap and must not trigger host calls or upstream probes. Result snapshots are copied under the lock and written to disk outside the critical section (async mid-run, synchronous on finish).
+
+Stop is cooperative: no new accounts are scheduled; in-flight probes still complete and are written; unscheduled accounts are recorded as cancelled (已停止，未探测) so progress can reach total.
+
+Source layout: engine.go (job lifecycle), probe.go (HTTP probe), identity.go (account matching), pply.go (bulk/row actions), management.go (CPA management HTTP).

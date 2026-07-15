@@ -100,7 +100,8 @@ func extractError(body string) probeError {
 	}
 	var data map[string]any
 	if err := json.Unmarshal([]byte(body), &data); err != nil {
-		return probeError{Message: body}
+		// Non-JSON body may still be an error string; keep it short for storage/export.
+		return probeError{Message: truncateErrMessage(body, 400)}
 	}
 	code := asString(data["code"])
 	message := ""
@@ -116,10 +117,22 @@ func extractError(body string) probeError {
 	if message == "" {
 		message = asString(data["message"])
 	}
-	if message == "" {
-		message = body
+	// Never fall back to the entire response body (healthy /v1/responses payloads are huge
+	// and would pollute error_message / bulk export).
+	return probeError{Code: code, Message: truncateErrMessage(message, 400)}
+}
+
+func truncateErrMessage(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value
 	}
-	return probeError{Code: code, Message: message}
+	// Avoid cutting mid-rune.
+	r := []rune(value)
+	if len(r) <= max {
+		return value
+	}
+	return string(r[:max]) + "…"
 }
 
 func classifyProbe(input classifyInput) classifyResult {
@@ -219,7 +232,7 @@ func pickModel(body string) string {
 	if len(ids) > 0 {
 		return ids[0]
 	}
-	return "grok-4.5"
+	return defaultProbeModel
 }
 
 func asString(value any) string {

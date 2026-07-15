@@ -738,7 +738,8 @@ func renderUIPage(pluginID string) []byte {
     return map[state.filter] || state.filter;
   }
   function downloadBlob(filename, content, mime) {
-    const blob = new Blob([content], { type: mime || 'text/plain;charset=utf-8' });
+    // UTF-8 BOM helps Windows Notepad open Chinese correctly.
+    const blob = new Blob(['\uFEFF', content], { type: mime || 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -748,8 +749,30 @@ func renderUIPage(pluginID string) []byte {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+  function decodeExportText(s) {
+    return String(s == null ? '' : s)
+      .replace(/&#34;/g, '"')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&');
+  }
+  function sanitizeExportRow(r) {
+    const o = Object.assign({}, r || {});
+    if (o.classification === 'healthy') {
+      delete o.error_message;
+      delete o.error_code;
+    } else if (o.error_message) {
+      let msg = decodeExportText(o.error_message);
+      if (msg.length > 500) msg = msg.slice(0, 500) + '…';
+      o.error_message = msg;
+    }
+    if (o.reason) o.reason = decodeExportText(o.reason);
+    return o;
+  }
   function exportRows(format) {
-    const rows = filtered();
+    const rows = filtered().map(sanitizeExportRow);
     if (!rows.length) {
       showErr('当前筛选下没有可导出的数据');
       return;

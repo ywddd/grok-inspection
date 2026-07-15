@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -191,6 +192,49 @@ func TestClassifyRealGrokFreeUsagePayload(t *testing.T) {
 		ChatError:  parsed.Message,
 	})
 	if got.Classification != "quota_exhausted" || got.Action != "disable" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestShouldTryFallback(t *testing.T) {
+	// Definitive classifications never need the second hop.
+	for _, class := range []string{"healthy", "quota_exhausted", "permission_denied", "reauth"} {
+		if shouldTryFallback(403, class) {
+			t.Fatalf("class %s should not fallback", class)
+		}
+	}
+	// Bare 429 / probe_error still may use fallback.
+	if !shouldTryFallback(429, "probe_error") {
+		t.Fatal("bare 429 probe_error should try fallback")
+	}
+	if !shouldTryFallback(500, "probe_error") {
+		t.Fatal("5xx should try fallback")
+	}
+}
+func TestIsProbeTimeoutErr(t *testing.T) {
+	if !isProbeTimeoutErr(fmt.Errorf("HTTP 探测超时（25s）: POST x")) {
+		t.Fatal("chinese timeout")
+	}
+	if !isProbeTimeoutErr(fmt.Errorf("context deadline exceeded: timeout")) {
+		t.Fatal("english timeout")
+	}
+	if isProbeTimeoutErr(fmt.Errorf("permission-denied")) {
+		t.Fatal("non-timeout should not match")
+	}
+}
+
+func TestExtractErrorDoesNotDumpSuccessBody(t *testing.T) {
+	body := `{"id":"abc","model":"grok-4.5","object":"response","output":[{"type":"message"}]}`
+	got := extractError(body)
+	if got.Message != "" || got.Code != "" {
+		t.Fatalf("success body must not become error fields: %+v", got)
+	}
+}
+
+func TestExtractErrorKeepsRealError(t *testing.T) {
+	body := `{"code":"permission-denied","error":"Access denied"}`
+	got := extractError(body)
+	if got.Code != "permission-denied" || got.Message != "Access denied" {
 		t.Fatalf("got %+v", got)
 	}
 }

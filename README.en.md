@@ -1,4 +1,4 @@
-﻿# Grok Inspection
+# Grok Inspection
 
 > [中文](README.md) | **English**
 

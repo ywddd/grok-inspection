@@ -400,10 +400,10 @@ func cloneHTTPHeader(src http.Header) http.Header {
 
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
 	e.mu.Lock()
-	if e.running || e.applying || e.actionInFlight > 0 {
-		e.mu.Unlock()
-		return fmt.Errorf("busy")
-	}
+		if e.running || e.applying || e.reauthing || e.baseURLApplying || e.actionInFlight > 0 {
+			e.mu.Unlock()
+			return fmt.Errorf("busy")
+		}
 	candidates, errCollect := e.collectCandidates(req)
 	if errCollect != nil {
 		e.mu.Unlock()
@@ -459,7 +459,15 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 		e.mu.Unlock()
 		return 0, "", fmt.Errorf("busy: bulk apply in progress")
 	}
-	e.actionSeq++
+		if e.reauthing {
+			e.mu.Unlock()
+			return 0, "", fmt.Errorf("busy: token refresh in progress")
+		}
+		if e.baseURLApplying {
+			e.mu.Unlock()
+			return 0, "", fmt.Errorf("busy: base_url switch in progress")
+		}
+		e.actionSeq++
 	seq := e.actionSeq
 	e.actionInFlight++
 	password = strings.TrimSpace(password)

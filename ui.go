@@ -36,6 +36,9 @@ func renderUIPage(pluginID string) []byte {
     .bar { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
     .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .actions-row .hint { font-size:12px; color:#64748b; }
+    .cred-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; padding:10px 12px; background:#fff; border:1px solid #e2e8f0; border-radius:10px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+    .cred-row .hint { font-size:12px; color:#64748b; line-height:1.45; }
+    .cred-row input[type=file] { font-size:12px; max-width:min(280px,100%%); }
     .progress { min-height:20px; font-size:12px; color:#64748b; display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:8px; max-width:100%%; }
     .progress.live { color:#1d4ed8; font-weight:700; background:#dbeafe; border:1px solid #93c5fd; box-shadow:0 0 0 1px rgba(37,99,235,.08); }
     .progress.live::before { content:""; width:8px; height:8px; border-radius:50%%; background:#2563eb; box-shadow:0 0 0 0 rgba(37,99,235,.55); animation:pulseDot 1.2s ease-out infinite; flex:0 0 auto; }
@@ -102,6 +105,8 @@ func renderUIPage(pluginID string) []byte {
     .grok-inspection-page td { border-color:var(--border-subtle) !important; }
     .grok-inspection-page .pager { background:var(--surface-muted) !important; border-color:var(--border) !important; }
     .grok-inspection-page .empty { color:var(--muted) !important; }
+    .grok-inspection-page .cred-row { background:var(--surface) !important; border-color:var(--border) !important; color:var(--text) !important; }
+    .grok-inspection-page .cred-row .hint { color:var(--muted) !important; }
     .grok-inspection-page .settings-row,
     .grok-inspection-page .actions-row { display:flex; gap:8px; flex-wrap:wrap; width:100%%; }
     .grok-inspection-page .settings-row > .ctl,
@@ -153,6 +158,10 @@ func renderUIPage(pluginID string) []byte {
       .grok-inspection-page .actions-row .hint {
         grid-column:1 / -1; line-height:1.5; overflow-wrap:anywhere;
       }
+      .grok-inspection-page .cred-row {
+        display:grid; grid-template-columns:1fr; gap:8px;
+      }
+      .grok-inspection-page .cred-row > button { width:100%%; }
       .grok-inspection-page .pager { align-items:stretch; }
       .grok-inspection-page .pager > div { width:100%%; }
       .grok-inspection-page .pager > div:last-child { justify-content:space-between; }
@@ -165,7 +174,7 @@ func renderUIPage(pluginID string) []byte {
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
         <h1>Grok 账号巡检</h1>
-        <p class="sub">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
+        <p class="sub">「开始巡检」优先测 CLI，若 403 再测 api.x.ai（现有 token，无需重登）；CLI 拒但 API 通会标为「API 可用」并可一键写入 using_api+base_url；可上传账号文件后对匹配的 403/需重登账号静默刷新 Token；结果会自动保存。</p>
       </div>
       <div class="controls">
         <div class="key-row" id="keyRow">
@@ -183,6 +192,14 @@ func renderUIPage(pluginID string) []byte {
       </div>
     </div>
     <div id="summary" class="summary"></div>
+    <div class="cred-row" id="credRow">
+      <input id="credFile" type="file" accept=".txt,.csv,text/plain" title="每行：邮箱----密码----sso">
+      <button id="credUploadBtn" class="soft" type="button" disabled>上传账号文件</button>
+      <button id="credClearBtn" type="button" disabled>清除凭证</button>
+      <button id="reauthBtn" class="soft" type="button" disabled title="对已上传且匹配的 403/需重登账号：优先 SSO device 重登，其次 refresh_token，然后复检">重新登录匹配账号</button>
+      <button id="baseurlBtn" class="soft" type="button" disabled title="对 CLI 拒绝但 api.x.ai 可用的账号写入 using_api=true 与 base_url=https://api.x.ai/v1（不改 token）">应用 api.x.ai base_url</button>
+      <span class="hint" id="credHint">账号文件格式：邮箱----密码----sso（密码/sso 仅内存保存，不落盘不回传浏览器）。匹配后可对 403/需重登账号纯接口重登并写回 CPA 文件。巡检会双通道探测 CLI 与 api.x.ai。</span>
+    </div>
     <div class="bar">
       <div class="actions-row">
         <button id="batchExportBtn" type="button" disabled>批量导出</button>
@@ -289,7 +306,7 @@ func renderUIPage(pluginID string) []byte {
     filter: 'all',
     page: 1,
     pageSize: 20,
-    snapshot: { results: [], summary: {}, running: false, applying: false, done: 0, total: 0 }
+    snapshot: { results: [], summary: {}, running: false, applying: false, reauthing: false, done: 0, total: 0, credentials: {} }
   };
   const $ = (id) => document.getElementById(id);
   const prefsKey = 'grokInspectionPrefs';
@@ -696,12 +713,12 @@ func renderUIPage(pluginID string) []byte {
   updateAuthState();
   const classLabel = {
     healthy: '健康', permission_denied: '权限被拒', quota_exhausted: '额度用尽',
-    reauth: '需重新登录', model_unavailable: '模型不可用', probe_error: '探测异常', unknown: '未知'
+    reauth: '需重新登录', api_gateway_ok: 'API可用', model_unavailable: '模型不可用', probe_error: '探测异常', unknown: '未知'
   };
-  const actionLabel = { keep: '保留', disable: '禁用', enable: '启用', delete: '删除' };
+  const actionLabel = { keep: '保留', disable: '禁用', enable: '启用', delete: '删除', switch_base_url: '切api.x.ai' };
   const color = {
     healthy: '#047857', permission_denied: '#b45309', quota_exhausted: '#b45309',
-    reauth: '#b91c1c', model_unavailable: '#475569', probe_error: '#b91c1c', unknown: '#475569'
+    reauth: '#b91c1c', api_gateway_ok: '#0369a1', model_unavailable: '#475569', probe_error: '#b91c1c', unknown: '#475569'
   };
   function pill(text, c) {
     return '<span class="pill" style="background:' + c + '1a;color:' + c + '">' + escapeHtml(text) + '</span>';
@@ -727,7 +744,7 @@ func renderUIPage(pluginID string) []byte {
     if (state.filter === 'other') {
       return rows.filter((r) => {
         const c = r.classification || '';
-        return c !== 'healthy' && c !== 'permission_denied' && c !== 'quota_exhausted' && c !== 'reauth';
+        return c !== 'healthy' && c !== 'permission_denied' && c !== 'quota_exhausted' && c !== 'reauth' && c !== 'api_gateway_ok';
       });
     }
     return rows.filter((r) => r.classification === state.filter);
@@ -739,6 +756,7 @@ func renderUIPage(pluginID string) []byte {
       permission_denied: '权限被拒',
       quota_exhausted: '额度用尽',
       reauth: '需重登',
+      api_gateway_ok: 'API可用',
       other: '异常'
     };
     return map[state.filter] || state.filter;
@@ -797,13 +815,18 @@ func renderUIPage(pluginID string) []byte {
     }
     const lines = [];
     lines.push('filter=' + filterLabel() + ' count=' + rows.length + ' exported_at=' + new Date().toISOString());
-    lines.push(['name','disabled','classification','http_status','model','action','reason','auth_index','file_name','email'].join('\t'));
+    lines.push(['name','disabled','classification','http_status','cli_http_status','api_http_status','preferred_base_url','auth_base_url','using_api','model','action','reason','auth_index','file_name','email'].join('\t'));
     rows.forEach((r) => {
       lines.push([
         r.name || '',
         r.disabled ? '1' : '0',
         r.classification || '',
         r.http_status || '',
+        r.cli_http_status || '',
+        r.api_http_status || '',
+        r.preferred_base_url || '',
+        r.auth_base_url || '',
+        r.using_api ? '1' : '0',
         r.model || '',
         r.action || '',
         (r.reason || r.error_message || '').replace(/[\t\r\n]+/g, ' '),
@@ -821,6 +844,7 @@ func renderUIPage(pluginID string) []byte {
       ['total','全部', summary.total || 0],
       ['healthy','健康', summary.healthy || 0],
       ['permission_denied','权限被拒', summary.permission_denied || 0],
+      ['api_gateway_ok','API可用', summary.api_gateway_ok || 0],
       ['quota_exhausted','额度用尽', summary.quota_exhausted || 0],
       ['reauth','需重登', summary.reauth || 0],
       ['other','异常', summary.other || 0],
@@ -865,10 +889,12 @@ func renderUIPage(pluginID string) []byte {
           '<td class="col-name">' + escapeHtml(r.name) + '</td>' +
           '<td class="col-status">' + pill(r.disabled ? '已禁用' : '已启用', r.disabled ? '#b45309' : '#047857') + '</td>' +
           '<td class="col-result">' + pill(classLabel[r.classification] || r.classification || '-', color[r.classification] || '#475569') + '</td>' +
-          '<td class="col-http">' + (r.http_status || '-') + '</td>' +
+          '<td class="col-http" title="CLI / API">' + (r.cli_http_status || r.http_status || '-') +
+            (r.api_http_status ? (' / ' + r.api_http_status) : '') + '</td>' +
           '<td class="col-model">' + escapeHtml(r.model || '-') + '</td>' +
           '<td class="col-action">' + (actionLabel[r.action] || r.action || '-') + '</td>' +
-          '<td class="col-reason">' + escapeHtml(r.reason || r.error_message || '-') + '</td>' +
+          '<td class="col-reason">' + escapeHtml(r.reason || r.error_message || '-') +
+            (r.preferred_base_url ? (' · ' + escapeHtml(r.preferred_base_url)) : '') + '</td>' +
           '<td class="col-ops">' + actionBtns + '</td>' +
         '</tr>';
       }).join('');
@@ -902,24 +928,48 @@ func renderUIPage(pluginID string) []byte {
     const next = $('next'); if (next) next.onclick = () => { if (state.page<totalPages){ state.page++; render(); } };
 
     const actionCount = (snap.results || []).filter((r) => r.action === 'disable' || r.action === 'enable' || r.action === 'delete').length;
+    const baseurlCount = (snap.results || []).filter((r) => r.classification === 'api_gateway_ok' || r.action === 'switch_base_url').length;
     const filteredCount = rows.length;
     const disableCount = rows.filter((r) => !r.disabled).length; // 当前分类下已启用 → 可禁用
     const enableCount = rows.filter((r) => !!r.disabled).length;  // 当前分类下已禁用 → 可启用
-    const busy = !!(snap.running || snap.applying);
+    const busy = !!(snap.running || snap.applying || snap.reauthing || snap.baseurl_applying);
     const hasResults = (snap.results || []).length > 0;
     const filterCount = state.filter === 'all' ? 0 : filteredCount;
+    const cred = snap.credentials || {};
+    const eligible = Number(cred.eligible || 0);
     $('runBtn').disabled = !hasManagementKey() || busy;
     $('incrBtn').disabled = !hasManagementKey() || busy || !hasResults;
     if ($('filterRunBtn')) {
       $('filterRunBtn').disabled = !hasManagementKey() || busy || state.filter === 'all' || filterCount === 0;
       $('filterRunBtn').textContent = filterCount ? ('巡检当前分类 (' + filterCount + ')') : '巡检当前分类';
     }
-    $('stopBtn').disabled = !hasManagementKey() || !snap.running;
+    $('stopBtn').disabled = !hasManagementKey() || !(snap.running || snap.reauthing || snap.baseurl_applying);
     $('applyBtn').disabled = !hasManagementKey() || busy || actionCount === 0;
     $('batchExportBtn').disabled = filteredCount === 0;
     $('batchDisableBtn').disabled = !hasManagementKey() || busy || disableCount === 0;
     $('batchEnableBtn').disabled = !hasManagementKey() || busy || enableCount === 0;
     $('batchDeleteBtn').disabled = !hasManagementKey() || busy || filteredCount === 0;
+    if ($('credUploadBtn')) $('credUploadBtn').disabled = !hasManagementKey() || busy;
+    if ($('credClearBtn')) $('credClearBtn').disabled = !hasManagementKey() || busy || !cred.has_data;
+    if ($('reauthBtn')) {
+      $('reauthBtn').disabled = !hasManagementKey() || busy || !cred.has_data || eligible <= 0;
+      $('reauthBtn').textContent = snap.reauthing
+        ? ('重登中 ' + (snap.reauth_done||0) + '/' + (snap.reauth_total||0))
+        : (eligible ? ('重新登录匹配账号 (' + eligible + ')') : '重新登录匹配账号');
+    }
+    if ($('baseurlBtn')) {
+      $('baseurlBtn').disabled = !hasManagementKey() || busy || baseurlCount <= 0;
+      $('baseurlBtn').textContent = snap.baseurl_applying
+        ? ('切换中 ' + (snap.baseurl_done||0) + '/' + (snap.baseurl_total||0))
+        : (baseurlCount ? ('应用 api.x.ai base_url (' + baseurlCount + ')') : '应用 api.x.ai base_url');
+    }
+    if ($('credHint')) {
+      if (!cred.has_data) {
+        $('credHint').textContent = '账号文件格式：邮箱----密码----sso（密码/sso 仅内存保存，不落盘不回传浏览器）。匹配后可对 403/需重登账号纯接口重登并写回 CPA 文件。HTTP 列显示 CLI/API 双状态。';
+      } else {
+        $('credHint').textContent = '已上传 ' + (cred.unique||0) + ' 个邮箱（解析 ' + (cred.uploaded||0) + ' 行，跳过 ' + (cred.skipped||0) + '）· 匹配巡检结果 ' + (cred.matched||0) + ' · 可重登 ' + eligible + (cred.unmatched ? (' · 未匹配 ' + cred.unmatched) : '') + (baseurlCount ? (' · 可切 API ' + baseurlCount) : '');
+      }
+    }
     $('applyBtn').textContent = snap.applying
       ? ('执行中 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0))
       : (actionCount ? ('执行建议操作 (' + actionCount + ')') : '执行建议操作');
@@ -929,6 +979,18 @@ func renderUIPage(pluginID string) []byte {
     $('batchDeleteBtn').textContent = filteredCount ? ('批量删除 (' + filteredCount + ')') : '批量删除';
     if (!hasManagementKey()) {
       setProgress('请输入 CPA Management Key 后加载巡检状态', false);
+    } else if (snap.baseurl_applying) {
+      let msg = '应用 api.x.ai base_url ' + (snap.baseurl_done||0) + '/' + (snap.baseurl_total||0) +
+        ' · 成功 ' + (snap.baseurl_successes||0) +
+        (snap.baseurl_current ? '：' + snap.baseurl_current : '');
+      if ((snap.baseurl_failures || []).length) msg += '；失败 ' + snap.baseurl_failures.length;
+      setProgress(msg, true);
+    } else if (snap.reauthing) {
+      let msg = '静默重登中 ' + (snap.reauth_done||0) + '/' + (snap.reauth_total||0) +
+        ' · 成功 ' + (snap.reauth_successes||0) +
+        (snap.reauth_current ? '：' + snap.reauth_current : '');
+      if ((snap.reauth_failures || []).length) msg += '；失败 ' + snap.reauth_failures.length;
+      setProgress(msg, true);
     } else if (snap.applying) {
       let msg = '后台执行操作 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
       if ((snap.apply_failures || []).length) msg += '；失败 ' + snap.apply_failures.length;
@@ -952,13 +1014,26 @@ func renderUIPage(pluginID string) []byte {
       }
       if (snap.store_path) msg += ' · 已落盘';
       if ((snap.apply_failures || []).length) msg += ' · 上次操作失败 ' + snap.apply_failures.length + ' 条';
+      if ((snap.reauth_failures || []).length) msg += ' · 上次刷新失败 ' + snap.reauth_failures.length + ' 条';
+      if ((snap.reauth_total || 0) > 0 && !snap.reauthing) {
+        msg += ' · 上次刷新 ' + (snap.reauth_successes||0) + '/' + (snap.reauth_total||0) + ' 成功';
+      }
+      if ((snap.baseurl_total || 0) > 0 && !snap.baseurl_applying) {
+        msg += ' · 上次切 API ' + (snap.baseurl_successes||0) + '/' + (snap.baseurl_total||0) + ' 成功';
+      }
       setProgress(msg, false);
     } else {
       setProgress('等待开始', false);
     }
-    if ((snap.apply_failures || []).length && !snap.applying) {
+    if ((snap.apply_failures || []).length && !snap.applying && !snap.reauthing && !snap.baseurl_applying) {
       // Always surface last op failures under the progress line (not below the table).
       showErr((snap.apply_failures || []).join('\n'));
+    } else if ((snap.reauth_failures || []).length && !snap.reauthing && !snap.applying && !snap.baseurl_applying) {
+      showErr((snap.reauth_failures || []).slice(0, 12).join('\n') +
+        ((snap.reauth_failures || []).length > 12 ? '\n…共 ' + snap.reauth_failures.length + ' 条' : ''));
+    } else if ((snap.baseurl_failures || []).length && !snap.baseurl_applying && !snap.applying && !snap.reauthing) {
+      showErr((snap.baseurl_failures || []).slice(0, 12).join('\n') +
+        ((snap.baseurl_failures || []).length > 12 ? '\n…共 ' + snap.baseurl_failures.length + ' 条' : ''));
     }
   }
   let pollTimer = null;
@@ -981,7 +1056,7 @@ func renderUIPage(pluginID string) []byte {
   }
   // Only poll while a server job is active; idle pages do not keep hitting /status.
   function syncPolling(snap) {
-    if (snap && (snap.running || snap.applying)) startPolling();
+    if (snap && (snap.running || snap.applying || snap.reauthing || snap.baseurl_applying)) startPolling();
     else stopPolling();
   }
   function mergeLightStatus(data) {
@@ -1008,7 +1083,7 @@ func renderUIPage(pluginID string) []byte {
     const light = !!(opts && opts.light);
     if (!keyInput.value.trim()) {
       stopPolling();
-      state.snapshot = { results: [], summary: {}, running: false, applying: false, done: 0, total: 0 };
+      state.snapshot = { results: [], summary: {}, running: false, applying: false, reauthing: false, baseurl_applying: false, done: 0, total: 0, credentials: {} };
       if ($('error').className === 'err') $('error').textContent = '';
       updateAuthState();
       render();
@@ -1017,7 +1092,7 @@ func renderUIPage(pluginID string) []byte {
     try {
       const path = light ? '/status?include_results=0' : '/status?include_results=1';
       const data = await api(path, { method: 'GET' });
-      const busy = !!(data && (data.running || data.applying));
+      const busy = !!(data && (data.running || data.applying || data.reauthing || data.baseurl_applying));
       const wasBusy = lastJobBusy;
       lastJobBusy = busy;
 
@@ -1035,7 +1110,7 @@ func renderUIPage(pluginID string) []byte {
         if (data.workers) $('workers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
       }
       // Do not wipe success toasts; only clear stale red errors when server is clean.
-      if (!(data.apply_failures || []).length && pendingOps.size === 0 && $('error').className === 'err') {
+      if (!(data.apply_failures || []).length && !(data.reauth_failures || []).length && !(data.baseurl_failures || []).length && pendingOps.size === 0 && $('error').className === 'err') {
         $('error').textContent = '';
       }
       syncPolling(data);
@@ -1113,13 +1188,104 @@ func renderUIPage(pluginID string) []byte {
   $('batchEnableBtn').onclick = () => batchForce('enable');
   $('batchDeleteBtn').onclick = () => batchForce('delete');
   $('batchExportBtn').onclick = () => batchExport();
+  if ($('credUploadBtn')) {
+    $('credUploadBtn').onclick = async () => {
+      const input = $('credFile');
+      const file = input && input.files && input.files[0];
+      if (!file) {
+        showErr('请先选择账号文件（每行：邮箱----密码----sso）');
+        return;
+      }
+      try {
+        const text = await file.text();
+        const result = await api('/credentials', {
+          method: 'POST',
+          body: JSON.stringify({ content: text })
+        });
+        if (result && result.ok === false) throw new Error(result.error || '上传失败');
+        const c = (result && result.credentials) || {};
+        showOk('账号文件已上传：' + (c.unique||0) + ' 个邮箱，匹配 ' + (c.matched||0) + '，可刷新 ' + (c.eligible||0));
+        if (input) input.value = '';
+        await refresh();
+      } catch (e) { showErr(String(e.message || e)); }
+    };
+  }
+  if ($('credClearBtn')) {
+    $('credClearBtn').onclick = async () => {
+      const ok = await confirmDialog('清除上传凭证', '将从插件内存清除已上传的账号密码/sso（不影响 CPA auth 文件）。');
+      if (!ok) return;
+      try {
+        await api('/credentials/clear', { method: 'POST', body: '{}' });
+        showOk('已清除内存中的上传凭证');
+        await refresh();
+      } catch (e) { showErr(String(e.message || e)); }
+    };
+  }
+  if ($('reauthBtn')) {
+    $('reauthBtn').onclick = async () => {
+      const cred = (state.snapshot && state.snapshot.credentials) || {};
+      const n = Number(cred.eligible || 0);
+      const ok = await confirmDialog(
+        '重新登录匹配账号',
+        '将对已上传文件精确匹配邮箱、且巡检结果为 403/需重登 的账号执行静默重登并复检（约 ' + n + ' 个）。\\n\\n' +
+        '流程（纯接口，不启浏览器）：\\n' +
+        '1. 优先用上传文件中的 SSO 走 device OAuth 重新签发 CPA 凭证；\\n' +
+        '2. 若无 SSO 则回退 refresh_token；\\n' +
+        '3. 写回 auth 文件后立即复检。\\n\\n' +
+        '注意：若账号本身已被 Grok 拒绝（403 Access denied），重登后仍可能 403，这是账号权限问题。\\n\\n' +
+        '请确认是否继续？'
+      );
+      if (!ok) return;
+      try {
+        const result = await api('/reauth/start', {
+          method: 'POST',
+          body: JSON.stringify({ workers: 4 })
+        });
+        if (result && result.ok === false) throw new Error(result.error || '启动失败');
+        const total = Number(result && result.reauth_total || 0);
+        showOk(total ? ('静默重登已在后台执行：共 ' + total + ' 个') : '静默重登已启动');
+        await refresh();
+      } catch (e) { showErr(String(e.message || e)); }
+    };
+  }
+  if ($('baseurlBtn')) {
+    $('baseurlBtn').onclick = async () => {
+      const rows = (state.snapshot.results || []).filter((r) => r.classification === 'api_gateway_ok' || r.action === 'switch_base_url');
+      const n = rows.length;
+      if (!n) {
+        showErr('没有可切换的账号（需要巡检结果为「API可用」：CLI 拒绝但 api.x.ai 可用）');
+        return;
+      }
+      const ok = await confirmDialog(
+        '应用 api.x.ai base_url',
+        '将对约 ' + n + ' 个账号写入：\\n' +
+        '· using_api = true\\n' +
+        '· base_url = https://api.x.ai/v1\\n\\n' +
+        '不修改 access_token / refresh_token（无需重新登录）。\\n' +
+        '依赖 CPA 对 using_api 的语义：chat 将走官方 API 而非 CLI 代理。\\n' +
+        '写入后可选复检 api.x.ai。\\n\\n' +
+        '请确认是否继续？'
+      );
+      if (!ok) return;
+      try {
+        const result = await api('/baseurl/apply', {
+          method: 'POST',
+          body: JSON.stringify({ workers: 4 })
+        });
+        if (result && result.ok === false) throw new Error(result.error || '启动失败');
+        const total = Number(result && result.baseurl_total || 0);
+        showOk(total ? ('base_url 切换已在后台执行：共 ' + total + ' 个') : 'base_url 切换已启动');
+        await refresh();
+      } catch (e) { showErr(String(e.message || e)); }
+    };
+  }
   $('confirmOk').onclick = () => closeConfirm(true);
   $('confirmCancel').onclick = () => closeConfirm(false);
   $('confirmModal').addEventListener('click', (ev) => {
     if (ev.target === $('confirmModal')) closeConfirm(false);
   });
   wireExclusive();
-  // One-shot load on open; polling starts only when status reports running/applying.
+  // One-shot load on open; polling starts only when status reports running/applying/reauthing.
   refresh();
   </script>
 </body>

@@ -84,7 +84,8 @@ func normalizeClassifications(values []string) []string {
 }
 
 // classificationMatches reports whether a result class is in the requested set.
-// Token "other" matches any class outside the four primary buckets.
+// Token "other" matches any class outside the primary buckets
+// (healthy / permission_denied / quota_exhausted / reauth / api_gateway_ok).
 func classificationMatches(class string, want map[string]struct{}) bool {
 	if len(want) == 0 {
 		return false
@@ -97,12 +98,12 @@ func classificationMatches(class string, want map[string]struct{}) bool {
 		return false
 	}
 	switch class {
-	case "healthy", "permission_denied", "quota_exhausted", "reauth":
-		return false
-	default:
-		return true
+		case "healthy", "permission_denied", "quota_exhausted", "reauth", "api_gateway_ok":
+			return false
+		default:
+			return true
+		}
 	}
-}
 
 func resultIdentityMatch(a, b accountResult) bool {
 	if ai := strings.TrimSpace(a.AuthIndex); ai != "" && ai == strings.TrimSpace(b.AuthIndex) {

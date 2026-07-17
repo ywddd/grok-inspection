@@ -13,3 +13,8 @@ Thumbs.db
 data/
 *.tmp
 *.bak
+
+# local tooling / secrets scratch (never commit)
+.zcode/
+.tmp_cpa_xai/
+.tmp_pr_body.md

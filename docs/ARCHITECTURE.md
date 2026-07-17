@@ -44,9 +44,13 @@ The Management API base is `/v0/management/plugins/grok-inspection`.
 |--------|-------|---------|
 | `GET` | `/status` | Return progress, summary, results, and recent row action reports |
 | `POST` | `/start` | Start full or incremental inspection |
-| `POST` | `/stop` | Stop scheduling new inspection work |
+| `POST` | `/stop` | Stop inspection / reauth / base_url apply jobs |
 | `POST` | `/apply` | Apply recommended or forced bulk actions asynchronously |
 | `POST` | `/action` | Run one row action asynchronously |
+| `POST` | `/credentials` | Upload accounts file (email----password----sso); secrets in memory only |
+| `POST` | `/credentials/clear` | Clear uploaded credentials from memory |
+| `POST` | `/reauth/start` | Silent token refresh for matched reauth/403 accounts |
+| `POST` | `/baseurl/apply` | Write `using_api=true` + `base_url=https://api.x.ai/v1` for CLI-denied / API-ok accounts |
 
 `/status` supports light polling with `include_results=0` or `light=1`. Light status omits the full result list and is used while inspection or actions are running.
 
@@ -70,21 +74,51 @@ Each inspection run uses a fixed free-tier probe model (no per-account `/v1/mode
 model = grok-4.5  # free accounts are remapped upstream to grok-4.5-build-free
 ```
 
-Each host HTTP call has a 25s timeout with one timeout-only retry (short backoff). A whole account probe hard-caps at ~55s so one hung upstream cannot stall the job forever.
+Each host HTTP call has a 25s timeout with one timeout-only retry (short backoff). A whole account probe hard-caps at ~90s so one hung upstream cannot stall the job forever (CLI + optional API probe).
 
-Every account is tested with:
+Every account is tested first on the CLI chat-proxy:
 
 ```text
 POST https://cli-chat-proxy.grok.com/v1/responses
 ```
 
-Fallback is used only when the primary result is **ambiguous** (temporary 429, 5xx, unknown, model unavailable, etc.):
+Fallback on CLI is used only when the primary result is **ambiguous** (temporary 429, 5xx, unknown, model unavailable, etc.):
 
 ```text
 POST https://cli-chat-proxy.grok.com/v1/chat/completions
 ```
 
-Definitive primary results skip fallback: `healthy`, `quota_exhausted` (free-usage only), `permission_denied`, `reauth`. When both are tried, free-usage / permission / reauth from primary remain authoritative if fallback returns success.
+Definitive primary results skip CLI fallback: `healthy`, `quota_exhausted` (free-usage only), `permission_denied`, `reauth`. When both are tried, free-usage / permission / reauth from primary remain authoritative if fallback returns success.
+
+### Dual gateway (CLI + official API)
+
+When CLI classification is `permission_denied` (or ambiguous 402/403), the same access_token is probed on the official API **without re-login** and **without CLI identity headers**:
+
+```text
+POST https://api.x.ai/v1/chat/completions
+```
+
+| CLI | api.x.ai | Result |
+|-----|----------|--------|
+| healthy | (not needed) | `healthy`, preferred `cli-chat-proxy` |
+| permission_denied | 2xx | **`api_gateway_ok`**, action `switch_base_url` (token works; no re-login) |
+| permission_denied | fail | stays `permission_denied` (+ gateway note) |
+| reauth / quota | (skipped) | never overridden by API probe |
+
+Result fields: `cli_http_status`, `api_http_status`, `preferred_base_url`, `auth_base_url`, `using_api`, `gateway_note`.
+
+### One-click base_url apply
+
+`POST /baseurl/apply` writes on selected auth files (via `host.auth.save`):
+
+- `using_api: true`
+- `base_url: https://api.x.ai/v1`
+
+Tokens are unchanged. CPA chat then honors the file when `using_api` is true (see CPA `xaiChatBaseURL`). Optional post-write re-probe of api.x.ai.
+
+### openai-compatibility fallback (older CPA)
+
+If production CPA is older and does not yet route native `grok-4.5` via `using_api`, add a config entry under `openai-compatibility` (token as api-key, model alias e.g. `grok-4.5-apixai`, `base-url: https://api.x.ai/v1`). Do not put tokens in results.json or the browser UI. After a CPA build that honors `using_api`, native `grok-4.5` is preferred.
 
 The probe classifies HTTP status and structured error fields. It does not rely on natural-language model output.
 
@@ -92,8 +126,9 @@ The probe classifies HTTP status and structured error fields. It does not rely o
 
 | Classification | Default action | Main signal |
 |----------------|----------------|-------------|
-| `healthy` | `keep`, or `enable` if currently disabled | Probe returned 2xx |
-| `permission_denied` | `disable`, or `keep` if already disabled | 402/403 or permission/banned/suspended text |
+| `healthy` | `keep`, or `enable` if currently disabled | CLI probe returned 2xx |
+| `api_gateway_ok` | `switch_base_url` (until applied → `keep`) | CLI denied; official api.x.ai 2xx with same token |
+| `permission_denied` | `disable`, or `keep` if already disabled | 402/403 or permission/banned/suspended text (and API also fails or not probed) |
 | `quota_exhausted` | `disable`, or `keep` if already disabled | Only Grok free-usage body/code (`subscription:free-usage-exhausted`, `free-usage-exhausted`, included free usage exhausted). Bare HTTP 429 is **not** quota |
 | `reauth` | `delete` | 401 or expired/invalid token text |
 | `model_unavailable` | `keep` | 404 or model unavailable text |
@@ -133,4 +168,4 @@ The engine keeps all mutable state behind a mutex and exposes snapshots to the U
 
 Stop is cooperative: no new accounts are scheduled; in-flight probes still complete and are written; unscheduled accounts are recorded as cancelled (已停止，未探测) so progress can reach total.
 
-Source layout: engine.go (job lifecycle), probe.go (HTTP probe), identity.go (account matching), pply.go (bulk/row actions), management.go (CPA management HTTP).
+Source layout: `engine.go` (job lifecycle), `probe.go` (dual-gateway HTTP probe), `baseurl.go` (using_api + base_url apply), `reauth.go` (silent OAuth refresh), `identity.go` (account matching), `apply.go` (bulk/row actions), `management.go` (CPA management HTTP), `ui.go` (embedded Management page).

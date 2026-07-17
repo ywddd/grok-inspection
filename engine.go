@@ -22,24 +22,31 @@ const (
 	deleteBatchSize = 50
 )
 
-type accountResult struct {
-	AuthIndex      string `json:"auth_index"`
-	Name           string `json:"name"`
-	FileName       string `json:"file_name,omitempty"`
-	Email          string `json:"email,omitempty"`
-	// FileID / FileModUnix / FileSize help incremental skip without relying on email/name.
-	FileID      string `json:"file_id,omitempty"`
-	FileModUnix int64  `json:"file_mod_unix,omitempty"`
-	FileSize    int64  `json:"file_size,omitempty"`
-	Disabled       bool   `json:"disabled"`
-	Classification string `json:"classification"`
-	Action         string `json:"action"`
-	Reason         string `json:"reason"`
-	HTTPStatus     int    `json:"http_status,omitempty"`
-	Model          string `json:"model,omitempty"`
-	ErrorCode      string `json:"error_code,omitempty"`
-	ErrorMessage   string `json:"error_message,omitempty"`
-}
+	type accountResult struct {
+		AuthIndex      string `json:"auth_index"`
+		Name           string `json:"name"`
+		FileName       string `json:"file_name,omitempty"`
+		Email          string `json:"email,omitempty"`
+		// FileID / FileModUnix / FileSize help incremental skip without relying on email/name.
+		FileID      string `json:"file_id,omitempty"`
+		FileModUnix int64  `json:"file_mod_unix,omitempty"`
+		FileSize    int64  `json:"file_size,omitempty"`
+		Disabled       bool   `json:"disabled"`
+		Classification string `json:"classification"`
+		Action         string `json:"action"`
+		Reason         string `json:"reason"`
+		HTTPStatus     int    `json:"http_status,omitempty"`
+		// Dual-gateway probe fields (CLI chat-proxy vs official api.x.ai).
+		CLIHTTPStatus    int    `json:"cli_http_status,omitempty"`
+		APIHTTPStatus    int    `json:"api_http_status,omitempty"`
+		PreferredBaseURL string `json:"preferred_base_url,omitempty"`
+		AuthBaseURL      string `json:"auth_base_url,omitempty"`
+		UsingAPI         bool   `json:"using_api,omitempty"`
+		GatewayNote      string `json:"gateway_note,omitempty"`
+		Model            string `json:"model,omitempty"`
+		ErrorCode        string `json:"error_code,omitempty"`
+		ErrorMessage     string `json:"error_message,omitempty"`
+	}
 
 // rowActionReport is a lightweight completion record for single-row /action.
 // Clients poll light /status until RecentRowActions contains their action_seq.
@@ -51,35 +58,49 @@ type rowActionReport struct {
 	Error  string `json:"error,omitempty"`
 }
 
-type jobSnapshot struct {
-	Running         bool            `json:"running"`
-	Stopped         bool            `json:"stopped"`
-	Applying        bool            `json:"applying"`
-	Incremental     bool            `json:"incremental"`
-	// Classifications is set when this run re-probes only matching last classifications.
-	Classifications []string        `json:"classifications,omitempty"`
-	Done            int             `json:"done"`
-	Total           int             `json:"total"`
-	Workers         int             `json:"workers"`
-	IncludeDisabled bool            `json:"include_disabled"`
-	OnlyDisabled    bool            `json:"only_disabled"`
-	ApplyDone       int             `json:"apply_done"`
-	ApplyTotal      int             `json:"apply_total"`
-	ApplyCurrent    string          `json:"apply_current,omitempty"`
-	ApplyFailures   []string        `json:"apply_failures,omitempty"`
-	// ActionInFlight is single-row ops still running (not bulk apply).
-	ActionInFlight int `json:"action_in_flight"`
-	// RecentRowActions holds latest completed single-row ops for light confirmation.
-	RecentRowActions []rowActionReport `json:"recent_row_actions,omitempty"`
-	StartedAt        string            `json:"started_at,omitempty"`
-	FinishedAt       string            `json:"finished_at,omitempty"`
-	Results          []accountResult   `json:"results,omitempty"`
-	Summary          map[string]int    `json:"summary"`
-	StorePath        string            `json:"store_path,omitempty"`
-	// ResultsGen bumps whenever results content changes; light status omits Results.
-	ResultsGen     uint64 `json:"results_gen"`
-	IncludeResults bool   `json:"include_results"`
-}
+	type jobSnapshot struct {
+		Running         bool            `json:"running"`
+		Stopped         bool            `json:"stopped"`
+		Applying        bool            `json:"applying"`
+		Reauthing       bool            `json:"reauthing"`
+		BaseURLApplying bool            `json:"baseurl_applying"`
+		Incremental     bool            `json:"incremental"`
+		// Classifications is set when this run re-probes only matching last classifications.
+		Classifications []string        `json:"classifications,omitempty"`
+		Done            int             `json:"done"`
+		Total           int             `json:"total"`
+		Workers         int             `json:"workers"`
+		IncludeDisabled bool            `json:"include_disabled"`
+		OnlyDisabled    bool            `json:"only_disabled"`
+		ApplyDone       int             `json:"apply_done"`
+		ApplyTotal      int             `json:"apply_total"`
+		ApplyCurrent    string          `json:"apply_current,omitempty"`
+		ApplyFailures   []string        `json:"apply_failures,omitempty"`
+		ReauthDone      int             `json:"reauth_done"`
+		ReauthTotal     int             `json:"reauth_total"`
+		ReauthSuccesses int             `json:"reauth_successes"`
+		ReauthCurrent   string          `json:"reauth_current,omitempty"`
+		ReauthFailures  []string        `json:"reauth_failures,omitempty"`
+		BaseURLDone       int      `json:"baseurl_done"`
+		BaseURLTotal      int      `json:"baseurl_total"`
+		BaseURLSuccesses  int      `json:"baseurl_successes"`
+		BaseURLCurrent    string   `json:"baseurl_current,omitempty"`
+		BaseURLFailures   []string `json:"baseurl_failures,omitempty"`
+		// ActionInFlight is single-row ops still running (not bulk apply).
+		ActionInFlight int `json:"action_in_flight"`
+		// RecentRowActions holds latest completed single-row ops for light confirmation.
+		RecentRowActions []rowActionReport `json:"recent_row_actions,omitempty"`
+		StartedAt        string            `json:"started_at,omitempty"`
+		FinishedAt       string            `json:"finished_at,omitempty"`
+		Results          []accountResult   `json:"results,omitempty"`
+		Summary          map[string]int    `json:"summary"`
+		StorePath        string            `json:"store_path,omitempty"`
+		// Credentials summarizes the in-memory uploaded accounts file (no secrets).
+		Credentials credentialSummary `json:"credentials"`
+		// ResultsGen bumps whenever results content changes; light status omits Results.
+		ResultsGen     uint64 `json:"results_gen"`
+		IncludeResults bool   `json:"include_results"`
+	}
 
 type startRequest struct {
 	Workers         int  `json:"workers"`
@@ -87,10 +108,10 @@ type startRequest struct {
 	OnlyDisabled    bool `json:"only_disabled"`
 	// Incremental only probes Auth accounts not already present in the last results.
 	Incremental bool `json:"incremental"`
-	// Classifications re-probes only accounts whose last classification matches.
-	// Keeps other results. Special token "other" matches non-primary classes
-	// (not healthy / permission_denied / quota_exhausted / reauth).
-	// Mutually exclusive with Incremental.
+		// Classifications re-probes only accounts whose last classification matches.
+		// Keeps other results. Special token "other" matches non-primary classes
+		// (not healthy / permission_denied / quota_exhausted / reauth / api_gateway_ok).
+		// Mutually exclusive with Incremental.
 	Classifications []string `json:"classifications"`
 }
 
@@ -120,31 +141,47 @@ type inspectionEngine struct {
 	runWG           sync.WaitGroup
 	running         bool
 	stopped         bool
-	applying        bool
-	actionInFlight  int // concurrent single-row enable/disable/delete goroutines
-	actionSeq       uint64
-	recentRowActions []rowActionReport // ring of latest completed single-row ops
-	incremental     bool
-	classifications []string // current/last scoped re-inspect classes
-	runID           uint64
-	workers         int
-	includeDisabled bool
-	onlyDisabled    bool
-	total           int
-	probeDone       int // probes completed in the current run (full or incremental)
-	results         []accountResult
-	applyDone       int
-	applyTotal      int
-	applyCurrent    string
-	applyFailures   []string
-	resultsGen      uint64 // monotonic; used by light /status clients
-	startedAt       time.Time
-	finishedAt      time.Time
-	// Current-run bookkeeping for immediate stop (filled when targets are known).
-	runTargets      []pluginapi.HostAuthFileEntry
-	runModel        string
-	runClassifyScoped bool
-}
+		applying        bool
+		reauthing       bool
+		reauthStop      bool
+		baseURLApplying bool
+		baseURLStop     bool
+		actionInFlight  int // concurrent single-row enable/disable/delete goroutines
+		actionSeq       uint64
+		recentRowActions []rowActionReport // ring of latest completed single-row ops
+		incremental     bool
+		classifications []string // current/last scoped re-inspect classes
+		runID           uint64
+		workers         int
+		includeDisabled bool
+		onlyDisabled    bool
+		total           int
+		probeDone       int // probes completed in the current run (full or incremental)
+		results         []accountResult
+		applyDone       int
+		applyTotal      int
+		applyCurrent    string
+		applyFailures   []string
+		reauthDone      int
+		reauthTotal     int
+		reauthSuccesses int
+		reauthCurrent   string
+		reauthFailures  []string
+		reauthStartedAt time.Time
+		reauthFinishedAt time.Time
+		baseURLDone      int
+		baseURLTotal     int
+		baseURLSuccesses int
+		baseURLCurrent   string
+		baseURLFailures  []string
+		resultsGen      uint64 // monotonic; used by light /status clients
+		startedAt       time.Time
+		finishedAt      time.Time
+		// Current-run bookkeeping for immediate stop (filled when targets are known).
+		runTargets      []pluginapi.HostAuthFileEntry
+		runModel        string
+		runClassifyScoped bool
+	}
 
 const maxRecentRowActions = 32
 
@@ -171,10 +208,10 @@ func (e *inspectionEngine) loadFromDisk() {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.running || e.applying {
-		return
-	}
-	e.results = append([]accountResult(nil), snap.Results...)
+		if e.running || e.applying || e.reauthing || e.baseURLApplying {
+			return
+		}
+		e.results = append([]accountResult(nil), snap.Results...)
 	e.bumpResultsLocked()
 	if snap.Workers >= minWorkers && snap.Workers <= maxWorkers {
 		e.workers = snap.Workers
@@ -232,31 +269,34 @@ func (e *inspectionEngine) bumpResultsLocked() {
 	e.resultsGen++
 }
 
-func summarizeResults(results []accountResult) map[string]int {
-	summary := map[string]int{
-		"total":             len(results),
-		"healthy":           0,
-		"permission_denied": 0,
-		"quota_exhausted":   0,
-		"reauth":            0,
-		"other":             0,
-	}
-	for _, item := range results {
-		switch item.Classification {
-		case "healthy":
-			summary["healthy"]++
-		case "permission_denied":
-			summary["permission_denied"]++
-		case "quota_exhausted":
-			summary["quota_exhausted"]++
-		case "reauth":
-			summary["reauth"]++
-		default:
-			summary["other"]++
+	func summarizeResults(results []accountResult) map[string]int {
+		summary := map[string]int{
+			"total":             len(results),
+			"healthy":           0,
+			"permission_denied": 0,
+			"quota_exhausted":   0,
+			"reauth":            0,
+			"api_gateway_ok":    0,
+			"other":             0,
 		}
+		for _, item := range results {
+			switch item.Classification {
+			case "healthy":
+				summary["healthy"]++
+			case "permission_denied":
+				summary["permission_denied"]++
+			case "quota_exhausted":
+				summary["quota_exhausted"]++
+			case "reauth":
+				summary["reauth"]++
+			case "api_gateway_ok":
+				summary["api_gateway_ok"]++
+			default:
+				summary["other"]++
+			}
+		}
+		return summary
 	}
-	return summary
-}
 
 // snapshot builds a status payload. When includeResults is false (light poll),
 // Results is omitted so progress polling stays cheap with 1000+ accounts.
@@ -269,27 +309,40 @@ func (e *inspectionEngine) snapshot(includeResults bool) jobSnapshot {
 func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 	summary := summarizeResults(e.results)
 	snap := jobSnapshot{
-		Running:          e.running,
-		Stopped:          e.stopped && !e.running,
-		Applying:         e.applying,
-		Incremental:      e.incremental,
-		Classifications:  append([]string(nil), e.classifications...),
-		Done:             e.probeDone,
-		Total:            e.total,
-		Workers:          e.workers,
-		IncludeDisabled:  e.includeDisabled,
-		OnlyDisabled:     e.onlyDisabled,
-		ApplyDone:        e.applyDone,
-		ApplyTotal:       e.applyTotal,
-		ApplyCurrent:     e.applyCurrent,
-		ApplyFailures:    append([]string(nil), e.applyFailures...),
-		ActionInFlight:   e.actionInFlight,
-		RecentRowActions: append([]rowActionReport(nil), e.recentRowActions...),
-		Summary:          summary,
-		StorePath:        storeFilePath(),
-		ResultsGen:       e.resultsGen,
-		IncludeResults:   includeResults,
-	}
+			Running:          e.running,
+			Stopped:          e.stopped && !e.running,
+			Applying:         e.applying,
+			Reauthing:        e.reauthing,
+			BaseURLApplying:  e.baseURLApplying,
+			Incremental:      e.incremental,
+			Classifications:  append([]string(nil), e.classifications...),
+			Done:             e.probeDone,
+			Total:            e.total,
+			Workers:          e.workers,
+			IncludeDisabled:  e.includeDisabled,
+			OnlyDisabled:     e.onlyDisabled,
+			ApplyDone:        e.applyDone,
+			ApplyTotal:       e.applyTotal,
+			ApplyCurrent:     e.applyCurrent,
+			ApplyFailures:    append([]string(nil), e.applyFailures...),
+			ReauthDone:       e.reauthDone,
+			ReauthTotal:      e.reauthTotal,
+			ReauthSuccesses:  e.reauthSuccesses,
+			ReauthCurrent:    e.reauthCurrent,
+			ReauthFailures:   append([]string(nil), e.reauthFailures...),
+			BaseURLDone:      e.baseURLDone,
+			BaseURLTotal:     e.baseURLTotal,
+			BaseURLSuccesses: e.baseURLSuccesses,
+			BaseURLCurrent:   e.baseURLCurrent,
+			BaseURLFailures:  append([]string(nil), e.baseURLFailures...),
+			ActionInFlight:   e.actionInFlight,
+			RecentRowActions: append([]rowActionReport(nil), e.recentRowActions...),
+			Summary:          summary,
+			StorePath:        storeFilePath(),
+			Credentials:      credentials.summaryAgainst(e.results),
+			ResultsGen:       e.resultsGen,
+			IncludeResults:   includeResults,
+		}
 	if includeResults {
 		snap.Results = append([]accountResult(nil), e.results...)
 	}
@@ -330,12 +383,12 @@ func (e *inspectionEngine) start(req startRequest) error {
 	}
 
 	e.mu.Lock()
-	if e.running || e.applying {
-		e.mu.Unlock()
-		return fmt.Errorf("inspection already running")
-	}
-	if e.actionInFlight > 0 {
-		e.mu.Unlock()
+		if e.running || e.applying || e.reauthing || e.baseURLApplying {
+			e.mu.Unlock()
+			return fmt.Errorf("inspection already running")
+		}
+		if e.actionInFlight > 0 {
+			e.mu.Unlock()
 		return fmt.Errorf("busy: row action in progress")
 	}
 	if req.Incremental && len(e.results) == 0 {
@@ -405,9 +458,12 @@ func (e *inspectionEngine) start(req startRequest) error {
 // stop aborts the job immediately for the UI:
 // running flips false now, unfinished targets become "已停止，未探测",
 // and in-flight probe results are discarded (run continues draining in background).
+// Also signals any token-refresh job to stop after the current account.
 func (e *inspectionEngine) stop() {
 	e.mu.Lock()
 	e.stopped = true
+	e.reauthStop = true
+	e.baseURLStop = true
 	if !e.running {
 		e.mu.Unlock()
 		return

@@ -12,7 +12,7 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.11"
+		pluginVersion         = "0.1.13"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -57,13 +57,17 @@ func pluginRegistration() registration {
 
 func managementRegistration() pluginapi.ManagementRegistrationResponse {
 	return pluginapi.ManagementRegistrationResponse{
-		Routes: []pluginapi.ManagementRoute{
-			{Method: http.MethodGet, Path: managementRoutePrefix + "/status", Description: "Get Grok inspection status."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full, incremental, or classify-scoped Grok inspection job."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
-		},
+	Routes: []pluginapi.ManagementRoute{
+				{Method: http.MethodGet, Path: managementRoutePrefix + "/status", Description: "Get Grok inspection status."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full, incremental, or classify-scoped Grok inspection job."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection or token-refresh job."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/credentials", Description: "Upload accounts file (email----password----sso); secrets stay in memory only."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/credentials/clear", Description: "Clear uploaded accounts credentials from memory."},
+					{Method: http.MethodPost, Path: managementRoutePrefix + "/reauth/start", Description: "Refresh OAuth tokens for matched 403/reauth accounts and re-probe."},
+					{Method: http.MethodPost, Path: managementRoutePrefix + "/baseurl/apply", Description: "Write using_api=true and api.x.ai base_url for CLI-denied accounts that work on official API."},
+				},
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/status",
@@ -114,35 +118,100 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			return jsonResponse(status, map[string]any{"error": msg})
 		}
 		return jsonResponse(http.StatusOK, engine.snapshot(true))
-	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
-		engine.stop()
-		return jsonResponse(http.StatusOK, engine.snapshot(false))
-	case method == http.MethodPost && matchesManagementPath(req.Path, "/apply"):
-		var body applyRequest
-		if len(req.Body) > 0 {
-			_ = json.Unmarshal(req.Body, &body)
-		}
-		// Async: returns immediately so status/action stay responsive and delete
-		// can call management HTTP without re-entering the same request lock.
-		// Capture page Management Key for background delete/auth API calls.
-		password := resolveManagementPassword(req.Headers)
-		if err := engine.startApply(body, password, req.Headers); err != nil {
-			status := http.StatusConflict
-			msg := err.Error()
-			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") {
-				status = http.StatusBadRequest
+			case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
+				engine.stop()
+				engine.stopReauth()
+				engine.stopBaseURLApply()
+				return jsonResponse(http.StatusOK, engine.snapshot(false))
+		case method == http.MethodPost && matchesManagementPath(req.Path, "/credentials"):
+			content, errBody := parseCredentialsUploadBody(req.Body)
+			if errBody != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": errBody.Error()})
 			}
-			return jsonResponse(status, map[string]any{"error": msg})
-		}
-		// Slim ack — full account list is only on GET /status (include_results=1).
-		snap := engine.snapshot(false)
-		return jsonResponse(http.StatusAccepted, map[string]any{
-			"ok":          true,
-			"accepted":    true,
-			"applying":    snap.Applying,
-			"apply_total": snap.ApplyTotal,
-			"apply_done":  snap.ApplyDone,
-		})
+			summary, errUpload := credentials.replaceFromContent(content)
+			if errUpload != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": errUpload.Error()})
+			}
+			return jsonResponse(http.StatusOK, map[string]any{
+				"ok":          true,
+				"credentials": summary,
+			})
+		case method == http.MethodPost && matchesManagementPath(req.Path, "/credentials/clear"):
+			credentials.clear()
+			return jsonResponse(http.StatusOK, map[string]any{
+				"ok":          true,
+				"credentials": credentials.summaryAgainst(engine.snapshot(true).Results),
+			})
+		case method == http.MethodPost && matchesManagementPath(req.Path, "/reauth/start"):
+			var body reauthStartRequest
+			if len(req.Body) > 0 {
+				_ = json.Unmarshal(req.Body, &body)
+			}
+			if err := engine.startReauth(body, "", req.Headers); err != nil {
+				status := http.StatusBadRequest
+				msg := err.Error()
+				if strings.Contains(msg, "already running") || strings.Contains(msg, "busy") {
+					status = http.StatusConflict
+				}
+				return jsonResponse(status, map[string]any{"error": msg})
+			}
+			snap := engine.snapshot(false)
+			return jsonResponse(http.StatusAccepted, map[string]any{
+				"ok":               true,
+				"accepted":         true,
+				"reauthing":        snap.Reauthing,
+				"reauth_total":     snap.ReauthTotal,
+				"reauth_done":      snap.ReauthDone,
+				"reauth_successes": snap.ReauthSuccesses,
+			})
+			case method == http.MethodPost && matchesManagementPath(req.Path, "/baseurl/apply"):
+				var body baseURLApplyRequest
+				if len(req.Body) > 0 {
+					_ = json.Unmarshal(req.Body, &body)
+				}
+				if err := engine.startBaseURLApply(body); err != nil {
+					status := http.StatusBadRequest
+					msg := err.Error()
+					if strings.Contains(msg, "already running") || strings.Contains(msg, "busy") {
+						status = http.StatusConflict
+					}
+					return jsonResponse(status, map[string]any{"error": msg})
+				}
+				snap := engine.snapshot(false)
+				return jsonResponse(http.StatusAccepted, map[string]any{
+					"ok":                true,
+					"accepted":          true,
+					"baseurl_applying":  snap.BaseURLApplying,
+					"baseurl_total":     snap.BaseURLTotal,
+					"baseurl_done":      snap.BaseURLDone,
+					"baseurl_successes": snap.BaseURLSuccesses,
+				})
+			case method == http.MethodPost && matchesManagementPath(req.Path, "/apply"):
+			var body applyRequest
+			if len(req.Body) > 0 {
+				_ = json.Unmarshal(req.Body, &body)
+			}
+			// Async: returns immediately so status/action stay responsive and delete
+			// can call management HTTP without re-entering the same request lock.
+			// Capture page Management Key for background delete/auth API calls.
+			password := resolveManagementPassword(req.Headers)
+			if err := engine.startApply(body, password, req.Headers); err != nil {
+				status := http.StatusConflict
+				msg := err.Error()
+				if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") {
+					status = http.StatusBadRequest
+				}
+				return jsonResponse(status, map[string]any{"error": msg})
+			}
+			// Slim ack — full account list is only on GET /status (include_results=1).
+			snap := engine.snapshot(false)
+			return jsonResponse(http.StatusAccepted, map[string]any{
+				"ok":          true,
+				"accepted":    true,
+				"applying":    snap.Applying,
+				"apply_total": snap.ApplyTotal,
+				"apply_done":  snap.ApplyDone,
+			})
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/action"):
 		var body actionRequest
 		if len(req.Body) > 0 {
@@ -176,6 +245,31 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 }
 
 // statusWantsResults defaults to full results; light polls pass include_results=0 or light=1.
+type credentialsUploadBody struct {
+	Content string `json:"content"`
+	Text    string `json:"text"`
+}
+
+// parseCredentialsUploadBody accepts raw text body or JSON {"content"|"text": "..."}.
+func parseCredentialsUploadBody(raw []byte) (string, error) {
+	s := strings.TrimSpace(string(raw))
+	if s == "" {
+		return "", fmt.Errorf("上传内容为空")
+	}
+	if strings.HasPrefix(s, "{") {
+		var body credentialsUploadBody
+		if err := json.Unmarshal(raw, &body); err != nil {
+			return "", fmt.Errorf("解析上传 JSON 失败: %w", err)
+		}
+		content := firstNonEmpty(body.Content, body.Text)
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("JSON 中缺少 content/text 字段")
+		}
+		return content, nil
+	}
+	return s, nil
+}
+
 func statusWantsResults(req pluginapi.ManagementRequest) bool {
 	if req.Query == nil {
 		return true

@@ -169,6 +169,12 @@ func TestResourcePageHasExportAndBatchOps(t *testing.T) {
 		`mode === 'filter'`,
 		`body.incremental = true`,
 		`['other','异常'`,
+		`id="schedCountdown"`,
+		`id="schedRunNowBtn"`,
+		`立即巡检`,
+		`function paintCountdown()`,
+		`function runScheduleNow()`,
+		`/schedule/run-now`,
 	}
 	for _, marker := range required {
 		if !strings.Contains(page, marker) {

@@ -12,7 +12,7 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.11"
+	pluginVersion         = "0.1.13-yuzu"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -63,12 +63,15 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
+			{Method: http.MethodGet, Path: managementRoutePrefix + "/schedule", Description: "Get scheduled inspection settings and status."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule", Description: "Update scheduled inspection settings (interval, auto-apply, safety limits)."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule/run-now", Description: "Trigger one scheduled inspection immediately and reset the next-run countdown."},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/status",
 				Menu:        "Grok 账号巡检",
-				Description: "服务端巡检 xAI/Grok 账号健康、权限与额度。",
+				Description: "服务端巡检 xAI/Grok 账号健康、权限与额度；支持定时巡检与建议操作。",
 			},
 		},
 	}
@@ -170,6 +173,45 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			"action_seq": seq,
 			"name":       firstNonEmpty(body.Name, body.AuthIndex),
 		})
+	case method == http.MethodGet && matchesManagementPath(req.Path, "/schedule"):
+		scheduler.init()
+		return jsonResponse(http.StatusOK, scheduler.snapshot())
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/schedule/run-now"):
+		scheduler.init()
+		// Capture management password from request headers for headless auto-apply.
+		password := resolveManagementPassword(req.Headers)
+		snap, err := scheduler.runNow(password)
+		if err != nil {
+			status := http.StatusConflict
+			msg := err.Error()
+			if strings.Contains(msg, "busy") || strings.Contains(msg, "already running") {
+				status = http.StatusConflict
+			}
+			return jsonResponse(status, map[string]any{"error": msg, "ok": false})
+		}
+		return jsonResponse(http.StatusAccepted, map[string]any{
+			"ok":       true,
+			"accepted": true,
+			"schedule": snap,
+		})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/schedule"):
+		scheduler.init()
+		var body scheduleConfig
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+			}
+		}
+		// Auto-capture management key from request headers for headless auto-apply.
+		// This way users never need to set MANAGEMENT_PASSWORD env var on the process.
+		if password := resolveManagementPassword(req.Headers); password != "" {
+			body.ManagementPassword = password
+		}
+		snap, err := scheduler.setConfig(body)
+		if err != nil {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		}
+		return jsonResponse(http.StatusOK, snap)
 	default:
 		return jsonResponse(http.StatusNotFound, map[string]any{"error": "not found", "path": req.Path, "method": method})
 	}

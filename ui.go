@@ -182,6 +182,39 @@ func renderUIPage(pluginID string) []byte {
         <button id="runBtn" class="primary">开始巡检</button>
       </div>
     </div>
+    <div class="schedule-panel" id="schedulePanel" style="margin-bottom:12px;background:var(--surface,#fff);border:1px solid var(--border,#e2e8f0);border-radius:10px;padding:12px 14px;box-shadow:0 1px 2px rgba(15,23,42,.04)">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <div>
+          <div style="font-size:13px;font-weight:700">定时巡检</div>
+          <div class="hint" id="scheduleHint" style="font-size:12px;color:#64748b;margin-top:2px">默认关闭；间隔默认 60 分钟、并发 6；不勾选「增量巡检」= 完整巡检。自动执行建议默认关，删除默认不在白名单。</div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <div id="schedCountdown" class="sched-countdown" style="font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;color:#0f172a;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:999px;padding:6px 12px;min-width:11em;text-align:center">下次：--:--:--</div>
+          <button id="schedRunNowBtn" type="button" class="soft" title="按当前定时参数立即跑一轮，并重置下次倒计时">立即巡检</button>
+          <label class="ctl"><input id="schedEnabled" type="checkbox"> 启用定时</label>
+        </div>
+      </div>
+      <div class="sched-section" style="border-top:1px solid var(--border,#e2e8f0);padding-top:10px;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:600;color:#334155;margin-bottom:6px">① 巡检参数</div>
+        <div class="settings-row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <label class="ctl">间隔(分钟) <input id="schedInterval" type="number" min="5" max="1440" step="1" value="60" title="5-1440，默认 60"></label>
+          <label class="ctl">并发 <input id="schedWorkers" type="number" min="1" max="16" step="1" value="6" title="默认 6"></label>
+          <label class="ctl" title="勾选=只扫相对上次新增的账号；不勾选=完整巡检"><input id="schedIncremental" type="checkbox"> 增量巡检</label>
+          <label class="ctl"><input id="schedIncludeDisabled" type="checkbox"> 包含已禁用</label>
+          <label class="ctl"><input id="schedOnlyDisabled" type="checkbox"> 仅已禁用</label>
+        </div>
+      </div>
+      <div class="sched-section" style="border-top:1px solid var(--border,#e2e8f0);padding-top:10px;margin-bottom:10px">
+        <div style="font-size:12px;font-weight:600;color:#334155;margin-bottom:6px">② 巡检后自动执行建议</div>
+        <div class="settings-row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <label class="ctl"><input id="schedAutoApply" type="checkbox"> 开启自动执行</label>
+          <label class="ctl"><input id="schedActDisable" type="checkbox" checked> 建议禁用</label>
+          <label class="ctl"><input id="schedActEnable" type="checkbox" checked> 建议启用</label>
+          <label class="ctl" title="危险：会删除 Auth 凭证"><input id="schedActDelete" type="checkbox"> 建议删除</label>
+        </div>
+        <div class="hint" style="font-size:11px;color:#94a3b8;margin-top:6px">仅在「开启自动执行」后生效；改动后自动保存。按上方勾选的动作白名单执行本轮全部匹配建议。「立即巡检」会用当前参数立刻跑一轮并重置倒计时。</div>
+      </div>
+    </div>
     <div id="summary" class="summary"></div>
     <div class="bar">
       <div class="actions-row">
@@ -968,6 +1001,13 @@ func renderUIPage(pluginID string) []byte {
   let lastResultsGen = 0;
   let lastFullResultsAt = 0;
   let fullResultsSyncing = false;
+  let scheduleSaveTimer = null;
+  let scheduleSaving = false;
+  let scheduleDirty = false;
+  let scheduleApplying = false;
+  let scheduleDeleteConfirmed = false;
+  let lastSchedule = null;
+  let countdownTimer = null;
   function stopPolling() {
     if (pollTimer != null) {
       clearInterval(pollTimer);
@@ -981,8 +1021,231 @@ func renderUIPage(pluginID string) []byte {
   }
   // Only poll while a server job is active; idle pages do not keep hitting /status.
   function syncPolling(snap) {
-    if (snap && (snap.running || snap.applying)) startPolling();
+    if (snap && (snap.running || snap.applying || (snap.schedule && snap.schedule.running))) startPolling();
     else stopPolling();
+  }
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function formatCountdown(ms) {
+    if (!Number.isFinite(ms)) return '--:--:--';
+    const total = Math.max(0, Math.floor(ms / 1000));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total %% 3600) / 60);
+        const s = total %% 60;
+        return pad2(h) + ':' + pad2(m) + ':' + pad2(s);
+  }
+  function parseScheduleTime(value) {
+    if (!value) return null;
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : null;
+  }
+  function paintCountdown() {
+    const el = $('schedCountdown');
+    if (!el) return;
+    const sched = lastSchedule || (state.snapshot && state.snapshot.schedule) || null;
+    if (!sched) {
+      el.textContent = '下次：--:--:--';
+      el.title = '';
+      return;
+    }
+    if (sched.running || (state.snapshot && (state.snapshot.running || state.snapshot.applying))) {
+      el.textContent = '巡检进行中…';
+      el.title = sched.last_run_at ? ('本轮开始：' + sched.last_run_at) : '';
+      return;
+    }
+    if (!sched.enabled) {
+      el.textContent = '定时未启用';
+      el.title = '勾选「启用定时」后显示倒计时；仍可用「立即巡检」手动触发';
+      return;
+    }
+    const nextAt = parseScheduleTime(sched.next_run_at);
+    if (nextAt == null) {
+      el.textContent = '下次：计算中';
+      el.title = '';
+      return;
+    }
+    const left = nextAt - Date.now();
+    if (left <= 0) {
+      el.textContent = '即将开始…';
+      el.title = '下次：' + sched.next_run_at;
+      return;
+    }
+    el.textContent = '下次：' + formatCountdown(left);
+    el.title = '下次巡检：' + sched.next_run_at + (sched.last_finished_at ? ('\n上次完成：' + sched.last_finished_at) : '');
+  }
+  function ensureCountdownTimer() {
+    if (countdownTimer != null) return;
+    countdownTimer = setInterval(paintCountdown, 1000);
+  }
+  function noteSchedule(sched) {
+    if (!sched) return;
+    lastSchedule = sched;
+    paintCountdown();
+    ensureCountdownTimer();
+  }
+  function applyScheduleToForm(sched) {
+    if (!sched || !$('schedEnabled') || scheduleSaving || scheduleDirty) {
+      if (sched) noteSchedule(sched);
+      return;
+    }
+    scheduleApplying = true;
+    try {
+      $('schedEnabled').checked = !!sched.enabled;
+      $('schedInterval').value = String(sched.interval_minutes || 60);
+      $('schedWorkers').value = String(clampWorkers(Number(sched.workers) || WORKERS_DEFAULT));
+      $('schedIncremental').checked = !!sched.incremental;
+      $('schedIncludeDisabled').checked = !!sched.include_disabled;
+      $('schedOnlyDisabled').checked = !!sched.only_disabled;
+      if ($('schedOnlyDisabled').checked) $('schedIncludeDisabled').checked = false;
+      $('schedAutoApply').checked = !!sched.auto_apply;
+      const acts = Array.isArray(sched.auto_apply_actions) ? sched.auto_apply_actions : [];
+      $('schedActDisable').checked = acts.indexOf('disable') >= 0 || (!acts.length && true);
+      $('schedActEnable').checked = acts.indexOf('enable') >= 0 || (!acts.length && true);
+      $('schedActDelete').checked = acts.indexOf('delete') >= 0;
+    } finally {
+      scheduleApplying = false;
+    }
+    noteSchedule(sched);
+  }
+  function readScheduleForm() {
+    const interval = Number(String($('schedInterval').value || '').trim());
+    const workers = Number(String($('schedWorkers').value || '').trim());
+    if (!Number.isInteger(interval) || interval < 5 || interval > 1440) {
+      throw new Error('定时间隔必须是 5-1440 的整数分钟');
+    }
+    if (!Number.isInteger(workers) || workers < WORKERS_MIN || workers > WORKERS_MAX) {
+      throw new Error('定时并发必须在 ' + WORKERS_MIN + '-' + WORKERS_MAX + ' 之间');
+    }
+    const actions = [];
+    if ($('schedActDisable').checked) actions.push('disable');
+    if ($('schedActEnable').checked) actions.push('enable');
+    if ($('schedActDelete').checked) actions.push('delete');
+    if ($('schedAutoApply').checked && !actions.length) {
+      throw new Error('开启自动执行建议时，至少勾选一种建议动作');
+    }
+    return {
+      enabled: !!$('schedEnabled').checked,
+      interval_minutes: interval,
+      workers: workers,
+      incremental: !!$('schedIncremental').checked,
+      include_disabled: !!$('schedIncludeDisabled').checked,
+      only_disabled: !!$('schedOnlyDisabled').checked,
+      auto_apply: !!$('schedAutoApply').checked,
+      auto_apply_actions: actions.length ? actions : ['disable', 'enable']
+    };
+  }
+  async function persistScheduleFromForm(opts) {
+    if (scheduleApplying || scheduleSaving) return;
+    if (!hasManagementKey()) {
+      showErr('请先填写 CPA Management Key');
+      return;
+    }
+    let body;
+    try {
+      body = readScheduleForm();
+    } catch (e) {
+      showErr(String(e.message || e));
+      return;
+    }
+    if (body.auto_apply && body.auto_apply_actions.indexOf('delete') >= 0 && !(opts && opts.skipDeleteConfirm)) {
+      if (!scheduleDeleteConfirmed) {
+        const ok = await confirmDialog(
+          '确认允许定时删除',
+          '你勾选了「建议删除」。定时自动执行会按建议删除 Auth 凭证，不可自动恢复。\n\n确定继续吗？'
+        );
+        if (!ok) {
+          scheduleApplying = true;
+          try { $('schedActDelete').checked = false; } finally { scheduleApplying = false; }
+          return persistScheduleFromForm({ skipDeleteConfirm: true });
+        }
+        scheduleDeleteConfirmed = true;
+      }
+    } else if (!(body.auto_apply && body.auto_apply_actions.indexOf('delete') >= 0)) {
+      scheduleDeleteConfirmed = false;
+    }
+    scheduleSaving = true;
+    scheduleDirty = true;
+    try {
+      const result = await api('/schedule', { method: 'POST', body: JSON.stringify(body) });
+      scheduleDirty = false;
+      applyScheduleToForm(result || body);
+      noteSchedule(result || body);
+      if ($('error').className === 'err') $('error').textContent = '';
+    } catch (e) {
+      showErr(String(e.message || e));
+    } finally {
+      scheduleSaving = false;
+    }
+  }
+  function queueSchedulePersist() {
+    if (scheduleApplying) return;
+    scheduleDirty = true;
+    if (scheduleSaveTimer != null) clearTimeout(scheduleSaveTimer);
+    scheduleSaveTimer = setTimeout(() => {
+      scheduleSaveTimer = null;
+      persistScheduleFromForm();
+    }, 350);
+  }
+  async function runScheduleNow() {
+    if (!hasManagementKey()) {
+      showErr('请先填写 CPA Management Key');
+      return;
+    }
+    const busy = !!(state.snapshot && (state.snapshot.running || state.snapshot.applying || (state.snapshot.schedule && state.snapshot.schedule.running)));
+    if (busy) {
+      showErr('当前已有巡检在进行，请稍后再试');
+      return;
+    }
+    const btn = $('schedRunNowBtn');
+    if (btn) btn.disabled = true;
+    try {
+      // Save current form first so run-now uses the params user sees.
+      if (scheduleDirty) await persistScheduleFromForm();
+      const result = await api('/schedule/run-now', { method: 'POST', body: '{}' });
+      if (result && result.ok === false) throw new Error(result.error || '触发失败');
+      if (result && result.schedule) {
+        applyScheduleToForm(result.schedule);
+        noteSchedule(result.schedule);
+      }
+      showOk('已触发立即巡检，倒计时已重置');
+      startPolling();
+      await refresh({ light: true });
+    } catch (e) {
+      showErr(String(e.message || e));
+    } finally {
+      if (btn) btn.disabled = false;
+      paintCountdown();
+    }
+  }
+  function wireScheduleBindings() {
+    if (!$('schedEnabled')) return;
+    const ids = [
+      'schedEnabled', 'schedInterval', 'schedWorkers', 'schedIncremental',
+      'schedIncludeDisabled', 'schedOnlyDisabled', 'schedAutoApply',
+      'schedActDisable', 'schedActEnable', 'schedActDelete'
+    ];
+    ids.forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        if (id === 'schedOnlyDisabled' && el.checked) $('schedIncludeDisabled').checked = false;
+        if (id === 'schedIncludeDisabled' && el.checked) $('schedOnlyDisabled').checked = false;
+        queueSchedulePersist();
+      });
+      if (el.type === 'number') {
+        el.addEventListener('input', () => {
+          if (scheduleApplying) return;
+          scheduleDirty = true;
+          if (scheduleSaveTimer != null) clearTimeout(scheduleSaveTimer);
+          scheduleSaveTimer = setTimeout(() => {
+            scheduleSaveTimer = null;
+            persistScheduleFromForm();
+          }, 700);
+        });
+      }
+    });
+    if ($('schedRunNowBtn')) $('schedRunNowBtn').onclick = () => runScheduleNow();
+    ensureCountdownTimer();
+    paintCountdown();
   }
   function mergeLightStatus(data) {
     const prev = state.snapshot || {};
@@ -991,6 +1254,7 @@ func renderUIPage(pluginID string) []byte {
       results: prev.results || [],
       include_results: false
     });
+    if (data && data.schedule) applyScheduleToForm(data.schedule);
   }
   async function syncFullResults(force) {
     if (fullResultsSyncing) return false;
@@ -1027,6 +1291,7 @@ func renderUIPage(pluginID string) []byte {
         state.snapshot = data || {};
         if (data && data.results_gen != null) lastResultsGen = Number(data.results_gen) || 0;
         lastFullResultsAt = Date.now();
+        if (data && data.schedule) applyScheduleToForm(data.schedule);
       }
 
       if (data && data.running) {
@@ -1091,6 +1356,7 @@ func renderUIPage(pluginID string) []byte {
     try { await api('/stop', { method: 'POST', body: '{}' }); await refresh(); }
     catch (e) { showErr(String(e.message || e)); }
   };
+  wireScheduleBindings();
   $('applyBtn').onclick = async () => {
     const actionCount = (state.snapshot.results || []).filter((r) => r.action === 'disable' || r.action === 'enable' || r.action === 'delete').length;
     const ok = await confirmDialog(

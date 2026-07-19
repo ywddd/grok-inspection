@@ -79,6 +79,8 @@ type jobSnapshot struct {
 	// ResultsGen bumps whenever results content changes; light status omits Results.
 	ResultsGen     uint64 `json:"results_gen"`
 	IncludeResults bool   `json:"include_results"`
+	// Schedule is the background timer status (cheap; no host calls).
+	Schedule *scheduleConfig `json:"schedule,omitempty"`
 }
 
 type startRequest struct {
@@ -152,6 +154,7 @@ var engine = &inspectionEngine{workers: defaultWorkers}
 
 func init() {
 	engine.loadFromDisk()
+	scheduler.init()
 }
 
 func normalizeWorkers(workers int) (int, error) {
@@ -268,6 +271,7 @@ func (e *inspectionEngine) snapshot(includeResults bool) jobSnapshot {
 
 func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 	summary := summarizeResults(e.results)
+	sched := scheduler.snapshot()
 	snap := jobSnapshot{
 		Running:          e.running,
 		Stopped:          e.stopped && !e.running,
@@ -289,6 +293,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		StorePath:        storeFilePath(),
 		ResultsGen:       e.resultsGen,
 		IncludeResults:   includeResults,
+		Schedule:         &sched,
 	}
 	if includeResults {
 		snap.Results = append([]accountResult(nil), e.results...)
@@ -375,11 +380,11 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.workers = workers
 	e.includeDisabled = includeDisabled
 	e.onlyDisabled = onlyDisabled
-	// Full inspect clears; incremental and classify-scoped keep existing rows.
-	if !req.Incremental && !classifyScoped {
-		e.results = nil
-		e.bumpResultsLocked()
-	}
+	// Do NOT clear results here for full inspect.
+	// Clearing at start() used to wipe the UI (and results.json) before auth
+	// list was fetched; if listing failed or returned 0 targets, the page
+	// showed "0 accounts" even though CPA still had hundreds of auth files.
+	// Full-inspect clear happens in run() only after the host auth list succeeds.
 	e.total = 0
 	e.probeDone = 0
 	e.applyDone = 0
@@ -455,6 +460,7 @@ func (e *inspectionEngine) abortRunLocked() {
 }
 
 func (e *inspectionEngine) shutdown() {
+	scheduler.shutdown()
 	e.mu.Lock()
 	e.stopped = true
 	e.runID++
@@ -528,6 +534,7 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 
 	list, errList := callHostAuthList()
 	if errList != nil {
+		// Keep previous results on list failure so the UI does not drop to 0.
 		write := e.appendResult
 		if len(classifications) > 0 {
 			write = e.upsertResult
@@ -575,6 +582,21 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		sort.Slice(targets, func(i, j int) bool {
 			return strings.ToLower(targets[i].Name) < strings.ToLower(targets[j].Name)
 		})
+	}
+
+	// Full inspect: clear previous rows only after we successfully listed auths
+	// and built the target set. This avoids wiping results.json / UI on failures
+	// or brief empty host states during CPA restart.
+	if !incremental && !classifyScoped {
+		e.mu.Lock()
+		if e.runID == runID {
+			e.results = nil
+			e.probeDone = 0
+			e.bumpResultsLocked()
+			// Persist the intentional clear only once list succeeded.
+			e.persistLocked()
+		}
+		e.mu.Unlock()
 	}
 
 	writeResult := e.appendResult

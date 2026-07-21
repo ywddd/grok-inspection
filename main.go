@@ -12,7 +12,7 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.12"
+	pluginVersion         = "0.1.13"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -63,12 +63,15 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
+				{Method: http.MethodGet, Path: managementRoutePrefix + "/schedule", Description: "Get periodic inspect + auto-apply schedule."},
+				{Method: http.MethodPut, Path: managementRoutePrefix + "/schedule", Description: "Create or update the periodic inspect + auto-apply schedule."},
+				{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule", Description: "Create or update the periodic inspect + auto-apply schedule."},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/status",
 				Menu:        "Grok 账号巡检",
-				Description: "服务端巡检 xAI/Grok 账号健康、权限与额度。",
+				Description: "服务端巡检 xAI/Grok 账号健康、权限与额度；支持定时自动处置。",
 			},
 		},
 	}
@@ -170,6 +173,21 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			"action_seq": seq,
 			"name":       firstNonEmpty(body.Name, body.AuthIndex),
 		})
+	case method == http.MethodGet && matchesManagementPath(req.Path, "/schedule"):
+		return jsonResponse(http.StatusOK, engine.getSchedule())
+	case (method == http.MethodPut || method == http.MethodPost) && matchesManagementPath(req.Path, "/schedule"):
+		var body scheduleRequest
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+			}
+		}
+		password := resolveManagementPassword(req.Headers)
+		status, err := engine.setSchedule(body, password)
+		if err != nil {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error()})
+		}
+		return jsonResponse(http.StatusOK, status)
 	default:
 		return jsonResponse(http.StatusNotFound, map[string]any{"error": "not found", "path": req.Path, "method": method})
 	}

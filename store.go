@@ -21,6 +21,22 @@ type persistedSnapshot struct {
 	FinishedAt      string          `json:"finished_at,omitempty"`
 	Results         []accountResult `json:"results"`
 	SavedAt         string          `json:"saved_at"`
+	// Schedule is optional periodic full-inspect + auto-apply settings (password is not stored).
+	Schedule *persistedSchedule `json:"schedule,omitempty"`
+}
+
+// persistedSchedule is the durable part of the auto schedule (no secrets).
+type persistedSchedule struct {
+	Enabled           bool   `json:"enabled"`
+	IntervalMinutes   int    `json:"interval_minutes"`
+	AutoApply         bool   `json:"auto_apply"`
+	Workers           int    `json:"workers"`
+	IncludeDisabled   bool   `json:"include_disabled"`
+	OnlyDisabled      bool   `json:"only_disabled"`
+	LastRunAt         string `json:"last_run_at,omitempty"`
+	NextRunAt         string `json:"next_run_at,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	LastAutoSummary   string `json:"last_auto_summary,omitempty"`
 }
 
 var (

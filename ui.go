@@ -165,7 +165,7 @@ func renderUIPage(pluginID string) []byte {
       <div>
         <div class="badge">xAI / Grok · CPA Plugin</div>
         <h1>Grok 账号巡检</h1>
-        <p class="sub">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
+        <p class="sub">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类；「批量操作」作用于当前筛选；可开启定时自动巡检+自动处置；结果会自动保存。</p>
       </div>
       <div class="controls">
         <div class="key-row" id="keyRow">
@@ -181,6 +181,21 @@ func renderUIPage(pluginID string) []byte {
         <button id="filterRunBtn" class="soft" disabled title="只重新探测当前卡片筛选分类下的账号，保留其他结果">巡检当前分类</button>
         <button id="runBtn" class="primary">开始巡检</button>
       </div>
+    </div>
+    <div class="schedule-panel" id="schedulePanel" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;margin-bottom:12px;box-shadow:0 1px 2px rgba(15,23,42,.04)">
+      <div style="display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-weight:700;font-size:14px">定时自动巡检</div>
+          <div class="sub" style="margin:2px 0 0;font-size:12px">默认每 10 分钟全量巡检（含已禁用）；结束后自动：权限被拒→删除 · 额度用尽→禁用 · 健康且禁用→启用 · 健康且启用→不动</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+          <label class="ctl"><input id="schedEnabled" type="checkbox"> 启用定时</label>
+          <label class="ctl">间隔(分) <input id="schedInterval" type="number" min="1" max="1440" step="1" value="10" style="width:64px"></label>
+          <label class="ctl"><input id="schedAutoApply" type="checkbox" checked> 巡检后自动处置</label>
+          <button id="schedSaveBtn" class="soft" type="button" disabled>保存定时</button>
+        </div>
+      </div>
+      <div id="schedStatus" class="hint" style="margin-top:8px;font-size:12px;color:#64748b">定时未加载</div>
     </div>
     <div id="summary" class="summary"></div>
     <div class="bar">
@@ -927,6 +942,7 @@ func renderUIPage(pluginID string) []byte {
     $('batchDisableBtn').textContent = disableCount ? ('批量禁用 (' + disableCount + ')') : '批量禁用';
     $('batchEnableBtn').textContent = enableCount ? ('批量启用 (' + enableCount + ')') : '批量启用';
     $('batchDeleteBtn').textContent = filteredCount ? ('批量删除 (' + filteredCount + ')') : '批量删除';
+    renderSchedule(snap.schedule);
     if (!hasManagementKey()) {
       setProgress('请输入 CPA Management Key 后加载巡检状态', false);
     } else if (snap.applying) {
@@ -976,6 +992,77 @@ func renderUIPage(pluginID string) []byte {
     if (pollTimer != null) {
       clearInterval(pollTimer);
       pollTimer = null;
+    }
+  }
+  function formatScheduleTime(iso) {
+    if (!iso) return '—';
+    try {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      return d.toLocaleString();
+    } catch (_) { return iso; }
+  }
+  function renderSchedule(sched) {
+    const s = sched || (state.snapshot && state.snapshot.schedule) || {};
+    if ($('schedEnabled')) $('schedEnabled').checked = !!s.enabled;
+    if ($('schedInterval') && document.activeElement !== $('schedInterval')) {
+      const n = Number(s.interval_minutes || 10);
+      $('schedInterval').value = String(n > 0 ? n : 10);
+    }
+    if ($('schedAutoApply') && document.activeElement !== $('schedAutoApply')) {
+      // default true when undefined (first load)
+      $('schedAutoApply').checked = (s.auto_apply !== false);
+    }
+    const parts = [];
+    if (s.enabled) {
+      parts.push('定时已开启 · 每 ' + (s.interval_minutes || 10) + ' 分钟');
+      parts.push(s.auto_apply ? '自动处置开' : '仅巡检不处置');
+      parts.push('上次: ' + formatScheduleTime(s.last_run_at));
+      parts.push('下次: ' + formatScheduleTime(s.next_run_at));
+      if (s.last_auto_summary) parts.push('最近处置: ' + s.last_auto_summary);
+      if (s.last_error) parts.push('错误: ' + s.last_error);
+      if (!s.has_password) parts.push('⚠ 未检测到 Management Key（容器请设 MANAGEMENT_PASSWORD，或在此页保存过 Key）');
+    } else {
+      parts.push('定时未开启');
+      if (s.last_run_at) parts.push('上次: ' + formatScheduleTime(s.last_run_at));
+      if (s.last_auto_summary) parts.push('最近处置: ' + s.last_auto_summary);
+      if (s.last_error) parts.push('错误: ' + s.last_error);
+    }
+    if ($('schedStatus')) $('schedStatus').textContent = parts.join(' · ');
+    if ($('schedSaveBtn')) $('schedSaveBtn').disabled = !hasManagementKey();
+  }
+  async function saveSchedule() {
+    if (!hasManagementKey()) {
+      showErr('请先填写 CPA Management Key');
+      return;
+    }
+    try {
+      const interval = Number($('schedInterval').value || 10);
+      if (!Number.isInteger(interval) || interval < 1 || interval > 1440) {
+        throw new Error('间隔必须是 1-1440 的整数分钟');
+      }
+      const workers = normalizeWorkersInput(false);
+      const body = {
+        enabled: !!$('schedEnabled').checked,
+        interval_minutes: interval,
+        auto_apply: !!$('schedAutoApply').checked,
+        workers: workers,
+        include_disabled: true,
+        only_disabled: false
+      };
+      const data = await api('/schedule', { method: 'PUT', body: JSON.stringify(body) });
+      if (state.snapshot) state.snapshot.schedule = data;
+      renderSchedule(data);
+      showOk(body.enabled
+        ? ('定时已保存：每 ' + interval + ' 分钟' + (body.auto_apply ? '，巡检后自动处置' : ''))
+        : '定时已关闭');
+      savePrefs({
+        schedEnabled: body.enabled,
+        schedInterval: interval,
+        schedAutoApply: body.auto_apply
+      });
+    } catch (e) {
+      showErr(String(e.message || e));
     }
   }
   function startPolling() {
@@ -1088,6 +1175,7 @@ func renderUIPage(pluginID string) []byte {
       savePrefs({ includeDisabled: include.checked, onlyDisabled: only.checked });
     };
   }
+  $('schedSaveBtn') && ($('schedSaveBtn').onclick = () => saveSchedule());
   $('runBtn').onclick = () => startInspection(false);
   $('incrBtn').onclick = () => startInspection(true);
   if ($('filterRunBtn')) $('filterRunBtn').onclick = () => startInspection('filter');

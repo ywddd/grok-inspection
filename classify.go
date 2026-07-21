@@ -171,15 +171,12 @@ func classifyProbe(input classifyInput) classifyResult {
 		"suspended",
 		"banned",
 	) {
-		action := "disable"
-		if disabled {
-			action = "keep"
-		}
+		// Permission-denied accounts are unusable for routing; recommend hard delete.
 		reason := "对话权限被拒绝"
 		if status > 0 {
 			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
 		}
-		return classifyResult{Classification: "permission_denied", Action: action, Reason: reason}
+		return classifyResult{Classification: "permission_denied", Action: "delete", Reason: reason}
 	}
 	if status == http.StatusNotFound || containsAny(blob, "not-found", "does not exist", "no access to it") {
 		return classifyResult{Classification: "model_unavailable", Action: "keep", Reason: "测试模型不可用"}

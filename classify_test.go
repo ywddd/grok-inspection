@@ -14,8 +14,18 @@ func TestClassifyPermissionDenied(t *testing.T) {
 		ChatError:  "Access to the chat endpoint is denied",
 		Disabled:   false,
 	})
-	if got.Classification != "permission_denied" || got.Action != "disable" {
+	if got.Classification != "permission_denied" || got.Action != "delete" {
 		t.Fatalf("got %+v", got)
+	}
+	// Disabled permission-denied accounts still recommend delete (not keep).
+	gotDisabled := classifyProbe(classifyInput{
+		ChatStatus: 403,
+		ChatCode:   "permission-denied",
+		ChatError:  "Access to the chat endpoint is denied",
+		Disabled:   true,
+	})
+	if gotDisabled.Classification != "permission_denied" || gotDisabled.Action != "delete" {
+		t.Fatalf("disabled got %+v", gotDisabled)
 	}
 }
 

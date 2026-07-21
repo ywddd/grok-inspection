@@ -84,6 +84,8 @@ type jobSnapshot struct {
 	// ResultsGen bumps whenever results content changes; light status omits Results.
 	ResultsGen     uint64 `json:"results_gen"`
 	IncludeResults bool   `json:"include_results"`
+	// Schedule is the periodic inspect + auto-apply configuration (no secrets).
+	Schedule scheduleStatus `json:"schedule"`
 }
 
 type startRequest struct {
@@ -153,11 +155,30 @@ type inspectionEngine struct {
 	runTargets        []pluginapi.HostAuthFileEntry
 	runModel          string
 	runClassifyScoped bool
+
+	// Periodic schedule (password kept in memory only).
+	schedule          persistedSchedule
+	schedulePassword  string
+	scheduleGen       uint64
+	schedulerStarted  bool
+	schedulerStop     chan struct{}
+	pendingAutoApply  bool // set by startScheduled; consumed when a run actually starts
+	autoApplyAfterRun bool
 }
 
 const maxRecentRowActions = 32
 
-var engine = &inspectionEngine{workers: defaultWorkers}
+var engine = &inspectionEngine{
+	workers:       defaultWorkers,
+	schedulerStop: make(chan struct{}),
+	schedule: persistedSchedule{
+		IntervalMinutes: defaultScheduleIntervalMin,
+		Workers:         defaultWorkers,
+		// Default filters when schedule is first enabled from API without body fields.
+		IncludeDisabled: true,
+		AutoApply:       true,
+	},
+}
 
 var (
 	callHostAuthListFn = callHostAuthList
@@ -166,6 +187,7 @@ var (
 
 func init() {
 	engine.loadFromDisk()
+	engine.ensureSchedulerLoop()
 }
 
 func normalizeWorkers(workers int) (int, error) {
@@ -217,15 +239,28 @@ func (e *inspectionEngine) loadFromDisk() {
 			e.finishedAt = t
 		}
 	}
+	if snap.Schedule != nil {
+		s := *snap.Schedule
+		if s.IntervalMinutes < minScheduleIntervalMin || s.IntervalMinutes > maxScheduleIntervalMin {
+			s.IntervalMinutes = defaultScheduleIntervalMin
+		}
+		if s.Workers < minWorkers || s.Workers > maxWorkers {
+			s.Workers = defaultWorkers
+		}
+		// Keep last_* fields; if enabled and next is empty/past, fire soon (loop handles it).
+		e.schedule = s
+	}
 }
 
 // copyPersistedLocked builds a disk snapshot while the caller holds e.mu.
 func (e *inspectionEngine) copyPersistedLocked() persistedSnapshot {
+	sched := e.schedule
 	snap := persistedSnapshot{
 		Workers:         e.workers,
 		IncludeDisabled: e.includeDisabled,
 		OnlyDisabled:    e.onlyDisabled,
 		Results:         append([]accountResult(nil), e.results...),
+		Schedule:        &sched,
 	}
 	if !e.startedAt.IsZero() {
 		snap.StartedAt = e.startedAt.Format(time.RFC3339)
@@ -328,6 +363,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 	if !e.finishedAt.IsZero() {
 		snap.FinishedAt = e.finishedAt.Format(time.RFC3339)
 	}
+	snap.Schedule = e.scheduleSnapshotLocked()
 	return snap
 }
 
@@ -396,6 +432,9 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.running = true
 	e.stopped = false
 	e.applying = false
+	// Consume one-shot auto-apply flag (set by startScheduled; manual start stays false).
+	e.autoApplyAfterRun = e.pendingAutoApply
+	e.pendingAutoApply = false
 	e.runTargets = nil
 	e.runModel = ""
 	e.runClassifyScoped = false
@@ -492,6 +531,15 @@ func (e *inspectionEngine) shutdown() {
 	e.mu.Lock()
 	e.stopped = true
 	e.runID++
+	e.schedule.Enabled = false
+	e.autoApplyAfterRun = false
+	if e.schedulerStop != nil {
+		select {
+		case <-e.schedulerStop:
+		default:
+			close(e.schedulerStop)
+		}
+	}
 	e.mu.Unlock()
 	e.runWG.Wait()
 }
@@ -582,9 +630,14 @@ func (e *inspectionEngine) finish(runID uint64) {
 	e.probePhase = "finished"
 	e.finishedAt = time.Now()
 	snap := e.copyPersistedLocked()
+	// Capture auto-apply intent before unlocking; trigger after disk write.
+	wantAuto := e.autoApplyAfterRun
 	e.mu.Unlock()
 	// Final flush is synchronous so the last results survive process restart.
 	_ = savePersistedSnapshot(snap)
+	if wantAuto {
+		e.triggerAutoApplyIfNeeded(runID)
+	}
 }
 
 // knownResultKeys builds skip-keys for incremental inspect.

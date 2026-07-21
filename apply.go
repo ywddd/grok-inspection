@@ -93,22 +93,26 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 		item := &engine.results[i]
 		if resultMatchesTarget(*item, target, name) {
 			item.Disabled = disabled
-			if disabled && item.Action == "disable" {
-				item.Action = "keep"
-			}
-			if !disabled && item.Action == "enable" {
-				item.Action = "keep"
-			}
-			if disabled && item.Classification == "healthy" {
-				item.Action = "enable"
-			}
+			// Recompute suggested action from classification + current disabled state.
+			// Force-enable on quota/permission must become "disable" again, not keep stale "keep".
+			item.Action = recommendAction(item.Classification, item.Disabled)
 		}
 	}
 	engine.bumpResultsLocked()
+	bansRemoved := 0
+	if !disabled {
+		// Inspection force-enable must drop autoban pool row so both pages stay aligned.
+		bansRemoved = clearBansMatchingTarget(target, name)
+	}
 	if persist {
 		engine.persistLocked()
 	}
 	engine.mu.Unlock()
+	if bansRemoved > 0 && persist {
+		if err := saveActiveStoreErr(); err != nil {
+			return fmt.Errorf("enabled in CPA but failed to persist ban state: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -132,6 +136,55 @@ func resultMatchesTarget(item accountResult, target *pluginapi.HostAuthFileEntry
 }
 
 // removeResultLocked drops matching rows from the in-memory list. Caller must hold e.mu.
+
+// clearBansMatchingTarget drops autoban pool rows for the same account identity.
+// AuthIDs in the ban store are typically file names; match AuthIndex/Name/ID/request aliases.
+// Returns how many ban entries were removed. Caller decides when to persist ban state.
+func clearBansMatchingTarget(target *pluginapi.HostAuthFileEntry, name string) int {
+	aliases := map[string]struct{}{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			aliases[v] = struct{}{}
+		}
+	}
+	add(name)
+	if target != nil {
+		add(target.AuthIndex)
+		add(target.Name)
+		add(target.ID)
+		add(target.Email)
+		add(target.Label)
+	}
+	if len(aliases) == 0 {
+		return 0
+	}
+	removed := 0
+	for _, entry := range activeStore.All() {
+		id := strings.TrimSpace(entry.AuthID)
+		if id == "" {
+			continue
+		}
+		if _, ok := aliases[id]; ok {
+			if activeStore.Delete(id) {
+				removed++
+			}
+			continue
+		}
+		// File base name without path segments sometimes used as ban key.
+		base := id
+		if i := strings.LastIndexAny(id, `/\`); i >= 0 {
+			base = id[i+1:]
+		}
+		if _, ok := aliases[base]; ok {
+			if activeStore.Delete(id) {
+				removed++
+			}
+		}
+	}
+	return removed
+}
+
 func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntry, name string) {
 	kept := make([]accountResult, 0, len(e.results))
 	for _, item := range e.results {
@@ -159,10 +212,16 @@ func deleteAuthFile(name string, password string, headers http.Header, persist b
 		if strings.Contains(errTarget.Error(), "auth not found") {
 			engine.mu.Lock()
 			engine.removeResultLocked(nil, name)
+			bansRemoved := clearBansMatchingTarget(nil, name)
 			if persist {
 				engine.persistLocked()
 			}
 			engine.mu.Unlock()
+			if bansRemoved > 0 && persist {
+				if err := saveActiveStoreErr(); err != nil {
+					return fmt.Errorf("deleted locally but failed to persist ban state: %w", err)
+				}
+			}
 			return nil
 		}
 		return errTarget
@@ -178,10 +237,16 @@ func deleteAuthFile(name string, password string, headers http.Header, persist b
 		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
 			engine.mu.Lock()
 			engine.removeResultLocked(target, name)
+			bansRemoved := clearBansMatchingTarget(target, name)
 			if persist {
 				engine.persistLocked()
 			}
 			engine.mu.Unlock()
+			if bansRemoved > 0 && persist {
+				if err := saveActiveStoreErr(); err != nil {
+					return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+				}
+			}
 			return nil
 		}
 		return errDelete
@@ -189,10 +254,16 @@ func deleteAuthFile(name string, password string, headers http.Header, persist b
 	// Trust a successful DELETE; do not re-list all CPA auth files to verify.
 	engine.mu.Lock()
 	engine.removeResultLocked(target, name)
+	bansRemoved := clearBansMatchingTarget(target, name)
 	if persist {
 		engine.persistLocked()
 	}
 	engine.mu.Unlock()
+	if bansRemoved > 0 && persist {
+		if err := saveActiveStoreErr(); err != nil {
+			return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -225,8 +296,10 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		// Skip duplicate physical names in the same batch (same file, multiple result rows).
 		if _, ok := seenName[fileName]; ok {
 			// Still drop matching local rows for this identity.
+			alias := firstNonEmpty(item.AuthIndex, item.FileName, item.Name, item.Email)
 			engine.mu.Lock()
-			engine.removeResultLocked(nil, firstNonEmpty(item.AuthIndex, item.FileName, item.Name, item.Email))
+			engine.removeResultLocked(nil, alias)
+			_ = clearBansMatchingTarget(nil, alias)
 			engine.mu.Unlock()
 			continue
 		}
@@ -257,7 +330,10 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
 			engine.mu.Lock()
 			for _, m := range mappedItems {
-				engine.removeResultLocked(nil, firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email))
+				alias := firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email)
+				engine.removeResultLocked(nil, alias)
+				_ = clearBansMatchingTarget(nil, alias)
+				_ = clearBansMatchingTarget(nil, m.fileName)
 			}
 			if persist {
 				engine.persistLocked()
@@ -303,7 +379,10 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 			failures = append(failures, m.item.Name+": "+errText)
 			continue
 		}
-		engine.removeResultLocked(nil, firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email))
+		alias := firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email)
+		engine.removeResultLocked(nil, alias)
+		_ = clearBansMatchingTarget(nil, alias)
+		_ = clearBansMatchingTarget(nil, m.fileName)
 	}
 	if persist {
 		engine.persistLocked()
@@ -400,9 +479,16 @@ func cloneHTTPHeader(src http.Header) http.Header {
 
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
 	e.mu.Lock()
-	if e.running || e.applying || e.actionInFlight > 0 {
+	if e.running || e.applying || e.applyDraining || e.actionInFlight > 0 {
 		e.mu.Unlock()
 		return fmt.Errorf("busy")
+	}
+	unbanJob.mu.Lock()
+	unbanBusy := unbanJob.running
+	unbanJob.mu.Unlock()
+	if unbanBusy {
+		e.mu.Unlock()
+		return fmt.Errorf("busy: unban in progress")
 	}
 	candidates, errCollect := e.collectCandidates(req)
 	if errCollect != nil {
@@ -417,6 +503,8 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 		return fmt.Errorf("no recommended actions")
 	}
 	e.applying = true
+	e.applyRunID++
+	applyID := e.applyRunID
 	e.applyDone = 0
 	e.applyTotal = len(candidates)
 	e.applyCurrent = ""
@@ -424,12 +512,12 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 	// Capture auth material for the background goroutine (request may free headers after return).
 	password = strings.TrimSpace(password)
 	headers = cloneHTTPHeader(headers)
+	e.runWG.Add(1)
 	e.mu.Unlock()
 
-	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
-		e.runApply(candidates, password, headers)
+		e.runApply(applyID, candidates, password, headers)
 	}()
 	return nil
 }
@@ -455,18 +543,25 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 		e.mu.Unlock()
 		return 0, "", fmt.Errorf("busy: inspection running")
 	}
-	if e.applying {
+	if e.applying || e.applyDraining {
 		e.mu.Unlock()
 		return 0, "", fmt.Errorf("busy: bulk apply in progress")
+	}
+	unbanJob.mu.Lock()
+	unbanBusy := unbanJob.running
+	unbanJob.mu.Unlock()
+	if unbanBusy {
+		e.mu.Unlock()
+		return 0, "", fmt.Errorf("busy: unban in progress")
 	}
 	e.actionSeq++
 	seq := e.actionSeq
 	e.actionInFlight++
 	password = strings.TrimSpace(password)
 	headers = cloneHTTPHeader(headers)
+	e.runWG.Add(1)
 	e.mu.Unlock()
 
-	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
 		// Yield so management.handle can finish before we re-enter Management HTTP
@@ -499,11 +594,33 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 	return seq, action, nil
 }
 
-func (e *inspectionEngine) runApply(candidates []accountResult, password string, headers http.Header) {
+func (e *inspectionEngine) isApplyActive(applyID uint64) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.applying && e.applyRunID == applyID
+}
+
+func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, password string, headers http.Header) {
 	defer func() {
+		// Bulk enable/delete skip per-account ban saves; flush once before the
+		// job becomes idle so a failed flush is part of the completed status.
+		banSaveErr := saveActiveStoreErr()
 		e.mu.Lock()
+		if banSaveErr != nil {
+			e.applyFailures = append(e.applyFailures, "保存自动禁用状态失败: "+banSaveErr.Error())
+			if len(e.applyFailures) > 20 {
+				e.applyFailures = e.applyFailures[:20]
+			}
+		}
+		if e.applyRunID == applyID {
+			e.applying = false
+			if e.applyCurrent != "已停止" {
+				e.applyCurrent = ""
+			}
+		}
+		// Always clear draining when this apply goroutine exits so new jobs can start.
+		e.applyDraining = false
 		e.applying = false
-		e.applyCurrent = ""
 		e.persistLocked()
 		e.mu.Unlock()
 	}()
@@ -521,19 +638,33 @@ func (e *inspectionEngine) runApply(candidates []accountResult, password string,
 
 	// --- Bulk delete via CPA multi-name DELETE (chunks of deleteBatchSize) ---
 	for i := 0; i < len(deletes); i += deleteBatchSize {
+		if !e.isApplyActive(applyID) {
+			return
+		}
 		end := i + deleteBatchSize
 		if end > len(deletes) {
 			end = len(deletes)
 		}
 		chunk := deletes[i:end]
 		e.mu.Lock()
+		if e.applyRunID != applyID {
+			e.mu.Unlock()
+			return
+		}
 		e.applyCurrent = fmt.Sprintf("delete batch %d-%d/%d", i+1, end, len(deletes))
 		e.mu.Unlock()
 
 		batchFails := deleteAuthFilesBatch(chunk, password, headers, false)
 		e.mu.Lock()
+		if e.applyRunID != applyID {
+			e.mu.Unlock()
+			return
+		}
 		if len(batchFails) > 0 {
 			e.applyFailures = append(e.applyFailures, batchFails...)
+			if len(e.applyFailures) > 20 {
+				e.applyFailures = e.applyFailures[:20]
+			}
 		}
 		e.applyDone += len(chunk)
 		if e.applyDone%applyPersistEvery == 0 || end == len(deletes) {
@@ -543,7 +674,7 @@ func (e *inspectionEngine) runApply(candidates []accountResult, password string,
 	}
 
 	// --- Enable/disable: no host batch API → concurrent single PATCH ---
-	if len(others) == 0 {
+	if len(others) == 0 || !e.isApplyActive(applyID) {
 		return
 	}
 	workers := defaultApplyWorkers
@@ -561,14 +692,24 @@ func (e *inspectionEngine) runApply(candidates []accountResult, password string,
 	var wg sync.WaitGroup
 
 	for _, item := range others {
+		if !e.isApplyActive(applyID) {
+			break
+		}
 		item := item
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			if !e.isApplyActive(applyID) {
+				return
+			}
 
 			e.mu.Lock()
+			if e.applyRunID != applyID {
+				e.mu.Unlock()
+				return
+			}
 			e.applyCurrent = item.Action + " " + item.Name
 			e.mu.Unlock()
 
@@ -585,8 +726,15 @@ func (e *inspectionEngine) runApply(candidates []accountResult, password string,
 			}
 
 			e.mu.Lock()
+			if e.applyRunID != applyID {
+				e.mu.Unlock()
+				return
+			}
 			if errAction != nil {
 				e.applyFailures = append(e.applyFailures, item.Name+": "+errAction.Error())
+				if len(e.applyFailures) > 20 {
+					e.applyFailures = e.applyFailures[:20]
+				}
 			}
 			e.applyDone++
 			done := e.applyDone

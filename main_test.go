@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"grok-inspection/cpasdk/pluginapi"
 )
@@ -82,10 +85,10 @@ func TestResourcePageDoesNotPollWithoutManagementKey(t *testing.T) {
 		t.Fatal("page should light-poll /status without full results during jobs")
 	}
 	for _, marker := range []string{
-		`const LIVE_RESULTS_MS = 2400`,
-		`async function syncFullResults(force)`,
+		`const LIVE_RESULTS_MS = 10000`,
+		`async function syncFullResults(force, busyRunning)`,
 		`gen !== lastResultsGen`,
-		`await syncFullResults(!busy)`,
+		`await syncFullResults(!busy, !!(data && (data.running || data.applying || (data.unban && data.unban.running))))`,
 	} {
 		if !strings.Contains(page, marker) {
 			t.Fatalf("page missing live result synchronization marker %q", marker)
@@ -101,7 +104,7 @@ func TestResourcePageHasMobileScopedHostThemeStyles(t *testing.T) {
 		`@media (max-width:760px)`,
 		`html[data-grok-theme="dark"]`,
 		`function detectHostTheme()`,
-		`setAttribute('data-grok-theme', detectHostTheme() || 'light')`,
+		`document.documentElement.setAttribute('data-grok-theme', theme)`,
 		`grid-template-columns:repeat(2,minmax(0,1fr))`,
 		`grid-column:1 / -1`,
 		`min-width:0`,
@@ -109,6 +112,39 @@ func TestResourcePageHasMobileScopedHostThemeStyles(t *testing.T) {
 	for _, marker := range required {
 		if !strings.Contains(page, marker) {
 			t.Fatalf("resource page missing mobile/dark-mode marker %q", marker)
+		}
+	}
+}
+
+func TestResourcePageTreatsCPAWhiteThemeAsLight(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	for _, marker := range []string{
+		`const lightNames = ['light', 'white', 'day', 'bright', 'default'];`,
+		`namedTheme(el.getAttribute && el.getAttribute(name))`,
+		`elementTheme(doc.documentElement) || elementTheme(doc.body) || backgroundTheme(doc)`,
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("resource page missing CPA white-theme marker %q", marker)
+		}
+	}
+}
+
+func TestResourcePageDialogMessagesUseEscapedNewlines(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	for _, invalid := range []string{
+		"个账号。\n后台异步执行",
+		"全部账号。\n后台异步执行",
+	} {
+		if strings.Contains(page, invalid) {
+			t.Fatalf("resource page contains a raw newline inside a JavaScript string: %q", invalid)
+		}
+	}
+	for _, required := range []string{
+		`个账号。\n后台异步执行`,
+		`全部账号。\n后台异步执行`,
+	} {
+		if !strings.Contains(page, required) {
+			t.Fatalf("resource page missing escaped dialog newline %q", required)
 		}
 	}
 }
@@ -195,5 +231,146 @@ func TestApplyAcceptedAsync(t *testing.T) {
 	})
 	if response.StatusCode != http.StatusConflict && response.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d body=%s", response.StatusCode, string(response.Body))
+	}
+}
+
+func TestResourcePageAutobanListUX(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	required := []string{
+		`禁用原因`,
+		`function formatBanReason`,
+		`function formatShanghaiTime`,
+		`function formatResetSource`,
+		`const esc = escapeHtml`,
+		`Asia/Shanghai`,
+		`额度用尽`,
+		`权限被拒绝`,
+		`认证失败`,
+		`需手动解禁`,
+		`定时自动恢复`,
+		`当前没有自动禁用中的账号`,
+		`banEnabledToggle`,
+		`banSummary`,
+		`data-ban-filter`,
+		`banPermissionCount`,
+		`banUnauthorizedCount`,
+		`unbanCurrentFilter`,
+		`setAutobanEnabled`,
+		`账号巡检`,
+		`实时自动禁用`,
+		`Grok 账号巡检`,
+		`if (hasManagementKey()) {`,
+		`loadBans();`,
+	}
+	for _, marker := range required {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("resource page missing autoban UX marker %q", marker)
+		}
+	}
+	// Removed duplicate settings / rules card
+	forbidden := []string{
+		`规则说明`,
+		`data-tab="settings"`,
+		`id="panel-settings"`,
+		`id="setWorkers"`,
+		`只处理：`,
+	}
+	for _, marker := range forbidden {
+		if strings.Contains(page, marker) {
+			t.Fatalf("resource page should not contain removed UI %q", marker)
+		}
+	}
+	// Column header renamed from 错误码
+	if strings.Contains(page, `>错误码<`) {
+		t.Fatal("ban table should use 禁用原因, not 错误码")
+	}
+}
+
+func TestManagementBansCountMatchesList(t *testing.T) {
+	isolateActiveStore(t)
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID:      "api-q.json",
+		Provider:    "xai",
+		ErrorCode:   exhaustedErrorCode,
+		BannedAt:    now.Add(-time.Minute),
+		ResetAt:     now.Add(time.Hour),
+		ResetSource: "local_plus_fallback",
+	})
+	activeStore.Set(banEntry{
+		AuthID:      "api-m.json",
+		Provider:    "xai",
+		ErrorCode:   permissionDeniedErrorCode,
+		BannedAt:    now.Add(-time.Minute),
+		ResetAt:     now.AddDate(50, 0, 0),
+		ResetSource: "manual_unban",
+	})
+	activeStore.Set(banEntry{
+		AuthID:      "api-u.json",
+		Provider:    "xai",
+		ErrorCode:   unauthorizedErrorCode,
+		BannedAt:    now.Add(-time.Minute),
+		ResetAt:     now.AddDate(50, 0, 0),
+		ResetSource: "manual_unban",
+	})
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet,
+		Path:   "/v0/management/plugins/grok-inspection/bans",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	var payload struct {
+		Count         int                      `json:"count"`
+		Bans          []map[string]interface{} `json:"bans"`
+		Quota         int                      `json:"quota_count"`
+		Permission    int                      `json:"permission_count"`
+		Unauthorized  int                      `json:"unauthorized_count"`
+		Manual        int                      `json:"manual_count"`
+	}
+	if err := json.Unmarshal(resp.Body, &payload); err != nil {
+		t.Fatalf("unmarshal: %v body=%s", err, string(resp.Body))
+	}
+	if payload.Count != len(payload.Bans) {
+		t.Fatalf("count=%d len(bans)=%d", payload.Count, len(payload.Bans))
+	}
+	if payload.Count != 3 || payload.Quota != 1 || payload.Permission != 1 || payload.Unauthorized != 1 || payload.Manual != 2 {
+		t.Fatalf("payload=%+v", payload)
+	}
+}
+
+func TestAutobanSettingsToggle(t *testing.T) {
+	dir := t.TempDir()
+	old := loadedConfig()
+	cfg := old
+	cfg.StateFile = filepath.Join(dir, "bans.json")
+	cfg.Enabled = true
+	currentConfig.Store(cfg)
+	t.Cleanup(func() { currentConfig.Store(old) })
+
+	off := false
+	got, err := updateAutobanSettings(&off, nil)
+	if err != nil {
+		t.Fatalf("updateAutobanSettings() error = %v", err)
+	}
+	if got.Enabled {
+		t.Fatal("enabled still true after toggle off")
+	}
+	if loadedConfig().Enabled {
+		t.Fatal("loadedConfig().Enabled still true")
+	}
+
+	resp := dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Path:   "/v0/management/plugins/grok-inspection/autoban-settings",
+		Body:   []byte(`{"enabled":true}`),
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
+	}
+	if !loadedConfig().Enabled {
+		t.Fatal("enabled not restored via management API")
 	}
 }

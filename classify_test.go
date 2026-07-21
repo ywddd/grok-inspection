@@ -203,9 +203,9 @@ func TestShouldTryFallback(t *testing.T) {
 			t.Fatalf("class %s should not fallback", class)
 		}
 	}
-	// Bare 429 / probe_error still may use fallback.
-	if !shouldTryFallback(429, "probe_error") {
-		t.Fatal("bare 429 probe_error should try fallback")
+	// Bare 429 must NOT use chat fallback (budget / abandoned host overlap).
+	if shouldTryFallback(429, "probe_error") {
+		t.Fatal("bare 429 probe_error should not try fallback")
 	}
 	if !shouldTryFallback(500, "probe_error") {
 		t.Fatal("5xx should try fallback")

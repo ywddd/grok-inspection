@@ -12,7 +12,7 @@ This is a **pure vibe-coding** plugin: it works and is practical, but the code m
 - **If you prefer not to rely on vibe-coded plugins**, use **CPA Manager Plus** (or a similar management panel) for account inspection / ops instead.
 - This plugin is a lightweight, **optional** Grok/xAI inspection add-on — not an official reference implementation.
 
-Version: `0.1.12` · Menu: **Grok Account Inspection**
+Version: `0.1.13` · Menu: **Grok Account Inspection**
 
 ## Features
 
@@ -22,6 +22,7 @@ Version: `0.1.12` · Menu: **Grok Account Inspection**
 - One-click suggested actions, bulk disable/delete, and single-account actions
 - Results are persisted and restored when you reopen the page
 - Export filtered results as JSON/TXT
+- Real-time autoban (on by default): free-usage cools down after 24h; 403/401 need manual unban
 
 ## Install
 
@@ -104,7 +105,7 @@ Inspection and bulk actions run in the background. Closing or switching pages do
 
 - Results are stored at `data/grok-inspection/results.json` under the CPA working directory
 - Result files store display fields only, not full tokens
-- The plugin never auto-disables or auto-deletes accounts; confirmation is required
+- Real-time autoban is on by default: free-usage-exhausted / permission-denied / 401 are auto-disabled (toggle off on the Autoban page). Inspection suggested actions still require confirmation
 - Delete removes the CPA auth credential; recovery requires re-login
 
 ## License

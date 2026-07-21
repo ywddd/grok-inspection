@@ -84,6 +84,9 @@ type jobSnapshot struct {
 	// ResultsGen bumps whenever results content changes; light status omits Results.
 	ResultsGen     uint64 `json:"results_gen"`
 	IncludeResults bool   `json:"include_results"`
+	// PersistError is the last results.json save failure, if any.
+	PersistError string         `json:"persist_error,omitempty"`
+	Unban        map[string]any `json:"unban,omitempty"`
 }
 
 type startRequest struct {
@@ -123,10 +126,14 @@ type authListResponse struct {
 type inspectionEngine struct {
 	mu               sync.Mutex
 	runWG            sync.WaitGroup
+	persistWG        sync.WaitGroup // async persistLocked writers
 	running          bool
 	stopped          bool
 	applying         bool
-	actionInFlight   int // concurrent single-row enable/disable/delete goroutines
+	applyDraining    bool   // bulk apply stopped but in-flight PATCHs still finishing
+	applyRunID       uint64 // invalidates in-flight bulk apply on stop
+	persistSeq       uint64 // monotonic snapshot id assigned at copy time
+	actionInFlight   int    // concurrent single-row enable/disable/delete goroutines
 	actionSeq        uint64
 	recentRowActions []rowActionReport // ring of latest completed single-row ops
 	incremental      bool
@@ -147,12 +154,16 @@ type inspectionEngine struct {
 	applyCurrent     string
 	applyFailures    []string
 	resultsGen       uint64 // monotonic; used by light /status clients
+	persistError     string
+	persistStatusSeq uint64 // only seq>=this may update/clear persistError
 	startedAt        time.Time
 	finishedAt       time.Time
 	// Current-run bookkeeping for immediate stop (filled when targets are known).
 	runTargets        []pluginapi.HostAuthFileEntry
 	runModel          string
 	runClassifyScoped bool
+	// fullClearPending: full inspect waits for list success before wiping results.
+	fullClearPending bool
 }
 
 const maxRecentRowActions = 32
@@ -165,6 +176,8 @@ var (
 )
 
 func init() {
+	// Only restore inspection results here. Ban state and the restore loop must
+	// wait for CPA PluginRegister/Reconfigure so state_file/settings are real.
 	engine.loadFromDisk()
 }
 
@@ -220,12 +233,16 @@ func (e *inspectionEngine) loadFromDisk() {
 }
 
 // copyPersistedLocked builds a disk snapshot while the caller holds e.mu.
+// Each snapshot gets a monotonic seq so delayed async saves cannot overwrite
+// a newer finish/stop flush.
 func (e *inspectionEngine) copyPersistedLocked() persistedSnapshot {
+	e.persistSeq++
 	snap := persistedSnapshot{
 		Workers:         e.workers,
 		IncludeDisabled: e.includeDisabled,
 		OnlyDisabled:    e.onlyDisabled,
 		Results:         append([]accountResult(nil), e.results...),
+		seq:             e.persistSeq,
 	}
 	if !e.startedAt.IsZero() {
 		snap.StartedAt = e.startedAt.Format(time.RFC3339)
@@ -236,13 +253,31 @@ func (e *inspectionEngine) copyPersistedLocked() persistedSnapshot {
 	return snap
 }
 
+// persistAsyncBeforeSave is an optional test hook invoked inside async
+// persistLocked goroutines before disk I/O (nil in production).
+var persistAsyncBeforeSave func()
+
 // persistLocked copies under the caller lock, then writes asynchronously so
 // status/snapshot callers are not blocked on disk I/O for large result lists.
+// Caller must hold e.mu. The writer is tracked on persistWG so shutdown can wait.
 func (e *inspectionEngine) persistLocked() {
+	e.persistWG.Add(1)
 	snap := e.copyPersistedLocked()
 	go func(s persistedSnapshot) {
-		_ = savePersistedSnapshot(s)
+		defer e.persistWG.Done()
+		if hook := persistAsyncBeforeSave; hook != nil {
+			hook()
+		}
+		err := savePersistedSnapshot(s)
+		e.mu.Lock()
+		e.applyPersistResultLocked(s.seq, err)
+		e.mu.Unlock()
 	}(snap)
+}
+
+// waitAsyncPersist blocks until all persistLocked writers finish.
+func (e *inspectionEngine) waitAsyncPersist() {
+	e.persistWG.Wait()
 }
 
 // persist copies under lock and writes outside the critical section.
@@ -250,7 +285,31 @@ func (e *inspectionEngine) persist() {
 	e.mu.Lock()
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
-	_ = savePersistedSnapshot(snap)
+	e.saveSnapshotAndRecord(snap)
+}
+
+func (e *inspectionEngine) saveSnapshotAndRecord(snap persistedSnapshot) {
+	err := savePersistedSnapshot(snap)
+	e.mu.Lock()
+	e.applyPersistResultLocked(snap.seq, err)
+	e.mu.Unlock()
+}
+
+// applyPersistResultLocked updates persistError only for snapshots that are not
+// older than the last reported generation. A delayed stale save that returns
+// nil must not clear a newer failure.
+func (e *inspectionEngine) applyPersistResultLocked(seq uint64, err error) {
+	if seq != 0 && seq < e.persistStatusSeq {
+		return
+	}
+	if seq > e.persistStatusSeq {
+		e.persistStatusSeq = seq
+	}
+	if err != nil {
+		e.persistError = err.Error()
+	} else {
+		e.persistError = ""
+	}
 }
 
 func (e *inspectionEngine) bumpResultsLocked() {
@@ -296,7 +355,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 	snap := jobSnapshot{
 		Running:          e.running,
 		Stopped:          e.stopped && !e.running,
-		Applying:         e.applying,
+		Applying:         e.applying || e.applyDraining,
 		Incremental:      e.incremental,
 		Classifications:  append([]string(nil), e.classifications...),
 		Done:             e.probeDone,
@@ -318,6 +377,8 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		StorePath:        storeFilePath(),
 		ResultsGen:       e.resultsGen,
 		IncludeResults:   includeResults,
+		PersistError:     e.persistError,
+		Unban:            unbanJobStatus(),
 	}
 	if includeResults {
 		snap.Results = append([]accountResult(nil), e.results...)
@@ -359,13 +420,20 @@ func (e *inspectionEngine) start(req startRequest) error {
 	}
 
 	e.mu.Lock()
-	if e.running || e.applying {
+	if e.running || e.applying || e.applyDraining {
 		e.mu.Unlock()
 		return fmt.Errorf("inspection already running")
 	}
 	if e.actionInFlight > 0 {
 		e.mu.Unlock()
 		return fmt.Errorf("busy: row action in progress")
+	}
+	unbanJob.mu.Lock()
+	unbanBusy := unbanJob.running
+	unbanJob.mu.Unlock()
+	if unbanBusy {
+		e.mu.Unlock()
+		return fmt.Errorf("busy: unban in progress")
 	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()
@@ -404,11 +472,8 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.workers = workers
 	e.includeDisabled = includeDisabled
 	e.onlyDisabled = onlyDisabled
-	// Full inspect clears; incremental and classify-scoped keep existing rows.
-	if !req.Incremental && !classifyScoped {
-		e.results = nil
-		e.bumpResultsLocked()
-	}
+	// Full inspect clears only after auth list succeeds (see run).
+	e.fullClearPending = !req.Incremental && !classifyScoped
 	e.total = 0
 	e.probeDone = 0
 	e.probePhase = "listing"
@@ -425,9 +490,10 @@ func (e *inspectionEngine) start(req startRequest) error {
 	runID := e.runID
 	incremental := e.incremental
 	e.persistLocked()
+	// Add while still locked relative to shutdown Wait to avoid race.
+	e.runWG.Add(1)
 	e.mu.Unlock()
 
-	e.runWG.Add(1)
 	go func() {
 		defer e.runWG.Done()
 		e.run(runID, workers, includeDisabled, onlyDisabled, incremental, classifications)
@@ -438,17 +504,29 @@ func (e *inspectionEngine) start(req startRequest) error {
 // stop aborts the job immediately for the UI:
 // running flips false now, unfinished targets become "已停止，未探测",
 // and in-flight probe results are discarded (run continues draining in background).
+// Also cancels bulk apply and async unban jobs.
 func (e *inspectionEngine) stop() {
+	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true
+	// Cancel bulk apply without waiting for in-flight Management calls.
+	// applyDraining keeps start/apply/unban blocked until those calls finish.
+	if e.applying {
+		e.applyRunID++
+		e.applying = false
+		e.applyDraining = true
+		e.applyCurrent = "已停止"
+	}
 	if !e.running {
+		snap := e.copyPersistedLocked()
 		e.mu.Unlock()
+		e.saveSnapshotAndRecord(snap)
 		return
 	}
 	e.abortRunLocked()
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
-	_ = savePersistedSnapshot(snap)
+	e.saveSnapshotAndRecord(snap)
 }
 
 // abortRunLocked finalizes a running job under e.mu.
@@ -489,11 +567,24 @@ func (e *inspectionEngine) abortRunLocked() {
 }
 
 func (e *inspectionEngine) shutdown() {
+	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true
 	e.runID++
+	e.applyRunID++
+	e.applying = false
+	e.applyDraining = true
 	e.mu.Unlock()
 	e.runWG.Wait()
+	unbanJob.wg.Wait()
+	// Async results.json writers must finish before TempDir/teardown.
+	e.waitAsyncPersist()
+	// Soft-timeout probes may still hold abandoned host.http.do callbacks.
+	// Wait until they finish before clearing host/dlclose.
+	waitHostCalls(0)
+	e.mu.Lock()
+	e.applyDraining = false
+	e.mu.Unlock()
 }
 
 func (e *inspectionEngine) isStopped(runID uint64) bool {
@@ -584,23 +675,55 @@ func (e *inspectionEngine) finish(runID uint64) {
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
 	// Final flush is synchronous so the last results survive process restart.
-	_ = savePersistedSnapshot(snap)
+	e.saveSnapshotAndRecord(snap)
 }
 
 // knownResultKeys builds skip-keys for incremental inspect.
 // Prefer stable auth_index only. Never use email/display name alone (re-import
 // with a new token would incorrectly skip). Without auth_index, fall back to
 // file_name + size + mtime (or file id) so a rewritten file is re-probed.
+
+// commitRunPlanLocked registers probe targets and, for full inspect, clears prior
+// results in the same critical section. Caller must hold e.mu.
+// cont=false means the run should exit (stale runID or stop already requested).
+// cleared=true when full results were wiped and should be persisted.
+func (e *inspectionEngine) commitRunPlanLocked(runID uint64, targets []pluginapi.HostAuthFileEntry, missing []accountResult, model string, classifyScoped bool) (cont bool, cleared bool) {
+	if e.runID != runID {
+		return false, false
+	}
+	if e.fullClearPending {
+		e.results = nil
+		e.bumpResultsLocked()
+		e.fullClearPending = false
+		cleared = true
+	}
+	if classifyScoped {
+		e.total = len(targets) + len(missing)
+	} else {
+		e.total = len(targets)
+	}
+	// Only probe targets are cancellable via immediate stop; missing already written.
+	e.runTargets = append([]pluginapi.HostAuthFileEntry(nil), targets...)
+	e.runModel = model
+	e.runClassifyScoped = classifyScoped
+	e.probePhase = "primary"
+	if e.stopped {
+		e.abortRunLocked()
+		return false, cleared
+	}
+	return true, cleared
+}
+
 func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyDisabled, incremental bool, classifications []string) {
 	defer e.finish(runID)
 
 	list, errList := callHostAuthListFn()
 	if errList != nil {
-		write := e.appendResult
-		if len(classifications) > 0 {
-			write = e.upsertResult
-		}
+		// Keep previous results on list failure (full inspect no longer wipes early).
+		// Use a stable auth_index so repeated failures do not accumulate fake rows.
+		write := e.upsertResult
 		write(runID, accountResult{
+			AuthIndex:      "__system_list_error__",
 			Name:           "system",
 			Classification: "probe_error",
 			Action:         "keep",
@@ -609,6 +732,9 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		return
 	}
 
+	// Full inspect clear is deferred until runTargets are registered (same critical
+	// section), so stop between list success and target commit cannot wipe history
+	// without cancelled rows.
 	classSet := stringSet(classifications)
 	classifyScoped := len(classSet) > 0
 
@@ -631,6 +757,17 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		}
 		e.mu.Unlock()
 		targets, missing = resolveClassifyTargets(list.Files, selected)
+		// Category re-probe matches the UI card: all accounts currently in that
+		// classification. Do not apply includeDisabled/onlyDisabled here — those
+		// options only scope full/incremental runs. Silently dropping disabled
+		// rows made card counts disagree with actual probe totals.
+		filtered := make([]pluginapi.HostAuthFileEntry, 0, len(targets))
+		for _, file := range targets {
+			if isXAIEntry(file.Provider, file.Name, file.Type) {
+				filtered = append(filtered, file)
+			}
+		}
+		targets = filtered
 	} else if incremental {
 		targets = filterNewAuthEntries(list.Files, known, includeDisabled, onlyDisabled)
 	} else {
@@ -675,24 +812,15 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 
 	model := resolveSharedProbeModel(targets)
 	e.mu.Lock()
-	if e.runID == runID {
-		if classifyScoped {
-			e.total = len(targets) + len(missing)
-		} else {
-			e.total = len(targets)
-		}
-		// Only probe targets are cancellable via immediate stop; missing already written.
-		e.runTargets = append([]pluginapi.HostAuthFileEntry(nil), targets...)
-		e.runModel = model
-		e.runClassifyScoped = classifyScoped
-		e.probePhase = "primary"
-		if e.stopped {
-			e.abortRunLocked()
-			snap := e.copyPersistedLocked()
-			e.mu.Unlock()
-			_ = savePersistedSnapshot(snap)
-			return
-		}
+	cont, cleared := e.commitRunPlanLocked(runID, targets, missing, model, classifyScoped)
+	if cleared {
+		e.persistLocked()
+	}
+	if !cont {
+		snap := e.copyPersistedLocked()
+		e.mu.Unlock()
+		e.saveSnapshotAndRecord(snap)
+		return
 	}
 	e.mu.Unlock()
 

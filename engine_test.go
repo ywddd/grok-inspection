@@ -620,6 +620,7 @@ func TestStartActionReturnsSeqAndReportsOnStatus(t *testing.T) {
 	engine = &inspectionEngine{workers: defaultWorkers}
 	t.Cleanup(func() {
 		engine.runWG.Wait()
+		engine.waitAsyncPersist()
 		engine = old
 	})
 
@@ -679,6 +680,44 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	setStoreFilePathForTest(dir + string(os.PathSeparator) + "results.json")
 	t.Cleanup(func() { setStoreFilePathForTest("") })
 
+	// Hold the CPA DELETE inside the handler so applying=true is observable.
+	// Without a barrier, a fast/failing delete can finish before snapshot/status.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			select {
+			case <-entered:
+			default:
+				close(entered)
+			}
+			<-release
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+
+	oldBase := cpaManagementBaseURL
+	oldDo := cpaManagementDo
+	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
+	cpaManagementBaseURL = server.URL
+	cpaManagementDo = server.Client().Do
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "page-password")
+	t.Cleanup(func() {
+		cpaManagementBaseURL = oldBase
+		cpaManagementDo = oldDo
+		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
 	old := engine
 	engine = &inspectionEngine{
 		workers: defaultWorkers,
@@ -688,6 +727,7 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		engine.runWG.Wait()
+		engine.waitAsyncPersist()
 		engine = old
 	})
 
@@ -701,14 +741,26 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	if time.Since(begin) > 100*time.Millisecond {
 		t.Fatalf("startApply should return immediately, took %s", time.Since(begin))
 	}
+
+	// Wait until the background delete is blocked in the CPA handler.
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("delete handler never entered; cannot assert applying state")
+	}
+
 	snap := engine.snapshot(false)
 	if !snap.Applying {
-		t.Fatal("expected applying=true")
+		close(release)
+		t.Fatal("expected applying=true while delete is in flight")
 	}
 	if snap.IncludeResults {
+		close(release)
 		t.Fatal("light snapshot should set include_results=false")
 	}
 	if len(snap.Results) != 0 {
+		close(release)
 		t.Fatalf("light snapshot should omit results, got %d", len(snap.Results))
 	}
 	// status path is pure memory and must not wait on apply/delete work
@@ -717,12 +769,80 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 		Path:   "/v0/management/plugins/grok-inspection/status",
 	})
 	if resp.StatusCode != http.StatusOK {
+		close(release)
 		t.Fatalf("status code = %d", resp.StatusCode)
 	}
 	if !strings.Contains(string(resp.Body), `"applying":true`) {
+		close(release)
 		t.Fatalf("status body missing applying=true: %s", string(resp.Body))
 	}
+
+	close(release)
 	engine.runWG.Wait()
+	engine.waitAsyncPersist()
+}
+
+func TestShutdownWaitsForAsyncPersist(t *testing.T) {
+	// Controllable barrier: lifecycle wait must not return while async save runs.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	oldHook := persistAsyncBeforeSave
+	persistAsyncBeforeSave = func() {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+		<-release
+	}
+	t.Cleanup(func() {
+		persistAsyncBeforeSave = oldHook
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	dir := t.TempDir()
+	setStoreFilePathForTest(filepath.Join(dir, "results.json"))
+	t.Cleanup(func() {
+		setStoreFilePathForTest("")
+	})
+
+	e := &inspectionEngine{workers: defaultWorkers}
+	e.mu.Lock()
+	e.results = []accountResult{{Name: "persist-me", AuthIndex: "p1"}}
+	e.persistLocked()
+	e.mu.Unlock()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatal("async persist never reached before-save hook")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		// Same order as shutdown after run/unban: wait async persist writers.
+		e.waitAsyncPersist()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		close(release)
+		t.Fatal("waitAsyncPersist returned before async save finished")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitAsyncPersist did not observe async save completion")
+	}
 }
 
 func TestClassifyScopedStartRequiresExistingResults(t *testing.T) {

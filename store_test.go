@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"sync"
 	"path/filepath"
 	"testing"
 	"time"
@@ -139,5 +140,157 @@ func TestCollectCandidatesForceActionByIndexes(t *testing.T) {
 	// force without selection is rejected
 	if _, err := e.collectCandidates(applyRequest{ForceAction: "disable"}); err == nil {
 		t.Fatal("expected error when force_action has no selection")
+	}
+}
+
+func TestSavePersistedSnapshotCoalescesConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "results.json")
+	setStoreFilePathForTest(path)
+	t.Cleanup(func() { setStoreFilePathForTest("") })
+
+	const writers = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			snap := persistedSnapshot{
+				Workers: i + 1,
+				Results: []accountResult{{
+					Name:           "acc-" + string(rune('a'+i%26)),
+					AuthIndex:      "idx-" + string(rune('a'+i%26)),
+					Classification: "healthy",
+					Action:         "keep",
+				}},
+			}
+			// Use distinct result counts so the last completed generation is easy to spot.
+			snap.Results = make([]accountResult, i+1)
+			for j := 0; j <= i; j++ {
+				snap.Results[j] = accountResult{
+					Name:           "n" + string(rune('a'+j%26)),
+					AuthIndex:      "i" + string(rune('a'+j%26)),
+					Classification: "healthy",
+					Action:         "keep",
+				}
+			}
+			if err := savePersistedSnapshot(snap); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	loaded, err := loadPersistedSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Results) == 0 {
+		t.Fatal("expected persisted results")
+	}
+	// Concurrent saves may coalesce; final file must be a complete valid snapshot
+	// from one of the writers (result count between 1 and writers).
+	if n := len(loaded.Results); n < 1 || n > writers {
+		t.Fatalf("unexpected result count %d", n)
+	}
+	if loaded.Workers < 1 || loaded.Workers > writers {
+		t.Fatalf("unexpected workers %d", loaded.Workers)
+	}
+	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("tmp file should not remain: %v", err)
+	}
+}
+
+func TestSavePersistedSnapshotSerializesWithLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "results.json")
+	setStoreFilePathForTest(path)
+	t.Cleanup(func() { setStoreFilePathForTest("") })
+
+	if err := savePersistedSnapshot(persistedSnapshot{
+		Workers: 3,
+		Results: []accountResult{{Name: "seed", AuthIndex: "s1", Classification: "healthy", Action: "keep"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 20
+	var wg sync.WaitGroup
+	errs := make(chan error, n*2)
+	for i := 0; i < n; i++ {
+		i := i
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			snap := persistedSnapshot{
+				Workers: (i % 8) + 1,
+				Results: make([]accountResult, (i%5)+1),
+			}
+			for j := range snap.Results {
+				snap.Results[j] = accountResult{Name: "x", AuthIndex: "a", Classification: "healthy", Action: "keep"}
+			}
+			if err := savePersistedSnapshot(snap); err != nil {
+				errs <- err
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if _, err := loadPersistedSnapshot(); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent save/load failed: %v", err)
+	}
+	if _, err := loadPersistedSnapshot(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSavePersistedSnapshotRejectsStaleSeq(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "results.json")
+	setStoreFilePathForTest(path)
+	resetStoreIOForTest()
+	t.Cleanup(func() {
+		setStoreFilePathForTest("")
+		resetStoreIOForTest()
+	})
+
+	// Simulate finish() writing a newer snapshot, then a delayed persistLocked with older seq.
+	newer := persistedSnapshot{
+		Workers: 4,
+		Results: []accountResult{{Name: "final", AuthIndex: "f1", Classification: "healthy", Action: "keep"}},
+		seq:     20,
+	}
+	older := persistedSnapshot{
+		Workers: 2,
+		Results: []accountResult{{Name: "partial", AuthIndex: "p1", Classification: "healthy", Action: "keep"}},
+		seq:     10,
+	}
+	if err := savePersistedSnapshot(newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := savePersistedSnapshot(older); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadPersistedSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Results) != 1 || loaded.Results[0].Name != "final" {
+		t.Fatalf("stale snapshot overwrote final: %+v", loaded.Results)
+	}
+	if loaded.Workers != 4 {
+		t.Fatalf("workers = %d", loaded.Workers)
 	}
 }

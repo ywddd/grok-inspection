@@ -152,14 +152,19 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string) account
 }
 
 // shouldTryFallback reports whether /chat/completions is worth calling after primary /responses.
+// Bare 429 is excluded: free-usage is definitive from primary, and temporary throttle
+// already gets one short primary retry. Fallback after 429 often burns the remaining
+// account budget (55s) while abandoned host.http.do still holds a gate slot.
 func shouldTryFallback(status int, classification string) bool {
 	switch classification {
 	case "reauth", "quota_exhausted", "permission_denied", "healthy":
 		return false
 	}
 	switch status {
-	case http.StatusForbidden, http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusPaymentRequired:
+	case http.StatusForbidden, http.StatusUnauthorized, http.StatusPaymentRequired:
 		return true
+	case http.StatusTooManyRequests:
+		return false
 	default:
 		return status == 0 || status >= 500 || classification == "probe_error" || classification == "unknown" || classification == "model_unavailable"
 	}

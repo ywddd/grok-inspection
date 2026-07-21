@@ -126,6 +126,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
+	stopBanRestoreLoop()
 	engine.shutdown()
 	C.clear_host_api()
 }

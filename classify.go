@@ -135,6 +135,28 @@ func truncateErrMessage(value string, max int) string {
 	return string(r[:max]) + "…"
 }
 
+
+// recommendAction maps classification + disabled flag to the UI suggested action.
+// Used after force enable/disable so recommendations stay consistent with probe results.
+func recommendAction(classification string, disabled bool) string {
+	switch strings.TrimSpace(classification) {
+	case "healthy":
+		if disabled {
+			return "enable"
+		}
+		return "keep"
+	case "quota_exhausted", "permission_denied":
+		if disabled {
+			return "keep"
+		}
+		return "disable"
+	case "reauth":
+		return "delete"
+	default:
+		return "keep"
+	}
+}
+
 func classifyProbe(input classifyInput) classifyResult {
 	status := input.ChatStatus
 	blob := lower(input.ChatCode) + " " + lower(input.ChatError)

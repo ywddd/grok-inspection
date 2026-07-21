@@ -12,7 +12,8 @@ import (
 
 const (
 	pluginName            = "grok-inspection"
-	pluginVersion         = "0.1.12"
+	pluginDisplayName     = "Grok 账号巡检"
+	pluginVersion         = "0.1.13"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -25,13 +26,22 @@ type registration struct {
 }
 
 type registrationCapabilities struct {
+	UsagePlugin   bool `json:"usage_plugin"`
+	Scheduler     bool `json:"scheduler"`
 	ManagementAPI bool `json:"management_api"`
 }
 
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
 	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+		if err := configure(request); err != nil {
+			return nil, err
+		}
 		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodUsageHandle:
+		return handlePluginMethod(method, request)
+	// MethodSchedulerPick intentionally not handled (unknown_method): we never
+	// register or occupy CPA's global scheduler slot.
 	case pluginabi.MethodManagementRegister:
 		return okEnvelope(managementRegistration())
 	case pluginabi.MethodManagementHandle:
@@ -45,13 +55,23 @@ func pluginRegistration() registration {
 	return registration{
 		SchemaVersion: pluginabi.SchemaVersion,
 		Metadata: pluginapi.Metadata{
-			Name:             pluginName,
+			Name:             pluginDisplayName,
 			Version:          pluginVersion,
 			Author:           "ywddd",
 			GitHubRepository: "https://github.com/ywddd/grok-inspection",
-			ConfigFields:     []pluginapi.ConfigField{},
+			ConfigFields: []pluginapi.ConfigField{
+				{Name: "autoban_enabled", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否启用自动禁用（free-usage / permission-denied / 401）。"},
+				{Name: "fallback_hours", Type: pluginapi.ConfigFieldTypeInteger, Description: "没有准确恢复时间时，free-usage-exhausted 的禁用小时数，默认 24。"},
+				{Name: "persist_state", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否将自动禁用状态保存到 state_file。"},
+				{Name: "state_file", Type: pluginapi.ConfigFieldTypeString, Description: "自动禁用状态 JSON 路径；留空时使用 data/grok-inspection/bans.json。"},
+				{Name: "log_matches", Type: pluginapi.ConfigFieldTypeBoolean, Description: "是否记录自动禁用命中日志。"},
+			},
 		},
-		Capabilities: registrationCapabilities{ManagementAPI: true},
+		Capabilities: registrationCapabilities{
+			UsagePlugin:   true,
+			Scheduler:     false, // never monopolize CPA global scheduler slot
+			ManagementAPI: true,
+		},
 	}
 }
 
@@ -63,12 +83,16 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
+			{Method: http.MethodGet, Path: managementRoutePrefix + "/bans", Description: "List Grok accounts banned by free-usage / permission-denied / 401."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban", Description: "Unban one Grok account and re-enable it in CPA."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban-all", Description: "Unban all Grok accounts tracked by autoban."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/autoban-settings", Description: "Update autoban enabled switch and fallback hours."},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/status",
-				Menu:        "Grok 账号巡检",
-				Description: "服务端巡检 xAI/Grok 账号健康、权限与额度。",
+				Menu:        pluginDisplayName,
+				Description: "Grok 账号巡检与自动禁用（free-usage / 403 / 401）。",
 			},
 		},
 	}
@@ -115,12 +139,14 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		}
 		return jsonResponse(http.StatusOK, engine.snapshot(true))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
-		engine.stop()
+		engine.stop() // also cancels bulk apply / unban jobs
 		return jsonResponse(http.StatusOK, engine.snapshot(false))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/apply"):
 		var body applyRequest
 		if len(req.Body) > 0 {
-			_ = json.Unmarshal(req.Body, &body)
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+			}
 		}
 		// Async: returns immediately so status/action stay responsive and delete
 		// can call management HTTP without re-entering the same request lock.
@@ -169,6 +195,128 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			"action":     action,
 			"action_seq": seq,
 			"name":       firstNonEmpty(body.Name, body.AuthIndex),
+		})
+	case method == http.MethodGet && matchesManagementPath(req.Path, "/bans"):
+		return jsonResponse(http.StatusOK, banStatus())
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban"):
+		var body struct {
+			AuthID string `json:"auth_id"`
+		}
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+			}
+		}
+		authID := strings.TrimSpace(body.AuthID)
+		if authID == "" {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing_auth_id", "ok": false})
+		}
+		password := resolveManagementPassword(req.Headers)
+		enabled, removed, errUnban := unbanOneAccount(authID, password)
+		if errUnban != nil {
+			status := http.StatusBadRequest
+			msg := errUnban.Error()
+			if strings.Contains(msg, "busy") {
+				status = http.StatusConflict
+			} else if strings.Contains(msg, "persist ban state") {
+				status = http.StatusInternalServerError
+			}
+			return jsonResponse(status, map[string]any{"error": msg, "ok": false, "removed": removed, "enabled": enabled})
+		}
+		return jsonResponse(http.StatusOK, map[string]any{
+			"ok":      true,
+			"removed": removed,
+			"enabled": enabled,
+			"missing": !enabled,
+		})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/autoban-settings"):
+		body := map[string]any{}
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err == nil {
+			} else {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error(), "ok": false})
+			}
+		}
+		var enabled *bool
+		var fallbackHours *int
+		if raw, ok := body["enabled"]; ok {
+			switch v := raw.(type) {
+			case bool:
+				enabled = &v
+			}
+		}
+		if raw, ok := body["fallback_hours"]; ok {
+			switch v := raw.(type) {
+			case float64:
+				// Reject non-integers like 1.9 so callers do not think 1 was accepted.
+				if v != float64(int(v)) {
+					return jsonResponse(http.StatusBadRequest, map[string]any{"error": "fallback_hours must be an integer between 1 and 168", "ok": false})
+				}
+				n := int(v)
+				fallbackHours = &n
+			case int:
+				n := v
+				fallbackHours = &n
+			case json.Number:
+				i64, errN := v.Int64()
+				if errN != nil {
+					return jsonResponse(http.StatusBadRequest, map[string]any{"error": "fallback_hours must be an integer between 1 and 168", "ok": false})
+				}
+				n := int(i64)
+				fallbackHours = &n
+			default:
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "fallback_hours must be an integer between 1 and 168", "ok": false})
+			}
+		}
+		// Accept either "enabled" (UI) or registered config name "autoban_enabled".
+		if enabled == nil {
+			if raw, ok := body["autoban_enabled"]; ok {
+				if v, ok := raw.(bool); ok {
+					enabled = &v
+				}
+			}
+		}
+		if enabled == nil && fallbackHours == nil {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing_settings", "ok": false})
+		}
+		cfg, err := updateAutobanSettings(enabled, fallbackHours)
+		if err == nil {
+			return jsonResponse(http.StatusOK, map[string]any{
+				"ok":             true,
+				"enabled":        cfg.Enabled,
+				"fallback_hours": cfg.FallbackHours,
+				"persist_state":  cfg.PersistState,
+				"state_file":     cfg.StateFile,
+			})
+		}
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "fallback_hours") {
+			status = http.StatusBadRequest
+		}
+		return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban-all"):
+		// Async bulk unban so large ban pools do not block the Management handler.
+		password := resolveManagementPassword(req.Headers)
+		var body struct {
+			Category string   `json:"category"`
+			AuthIDs  []string `json:"auth_ids"`
+		}
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+			}
+		}
+		if err := startUnbanJob(body.AuthIDs, body.Category, password); err != nil {
+			status := http.StatusConflict
+			if strings.Contains(err.Error(), "no accounts") {
+				status = http.StatusBadRequest
+			}
+			return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
+		}
+		return jsonResponse(http.StatusAccepted, map[string]any{
+			"ok":       true,
+			"accepted": true,
+			"unban":    unbanJobStatus(),
 		})
 	default:
 		return jsonResponse(http.StatusNotFound, map[string]any{"error": "not found", "path": req.Path, "method": method})

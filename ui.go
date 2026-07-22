@@ -694,7 +694,7 @@ func renderUIPage(pluginID string) []byte {
       ban_empty_filter_prefix:'当前分类「', ban_empty_filter_suffix:'」没有账号',
       ban_need_key_load:'请输入 CPA Management Key 后加载自动禁用状态',
       ban_not_loaded:'未加载', ban_running:'运行中',
-      pager_total_prefix:'共 ', pager_total_suffix:' 个', pager_page_mid:' · 第 ', pager_page_of:' / ', pager_page_suffix:' 页',
+      pager_total_prefix:'共 ', pager_total_suffix:' 个', pager_filter_prefix:'（', pager_filter_suffix:'）', pager_page_mid:' · 第 ', pager_page_of:' / ', pager_page_suffix:' 页',
       unban_confirm_title:'确认解禁', unban_confirm_body_prefix:'将重新启用账号：\n',
       unban_failed:'解禁失败', unban_success_title:'解禁成功',
       unban_missing:'账号已不在 CPA 认证列表中，已清除本插件禁用记录',
@@ -812,7 +812,7 @@ func renderUIPage(pluginID string) []byte {
       ban_empty_filter_prefix:'No accounts in filter "', ban_empty_filter_suffix:'"',
       ban_need_key_load:'Enter the CPA Management Key to load auto-ban status',
       ban_not_loaded:'Not loaded', ban_running:'Running',
-      pager_total_prefix:'', pager_total_suffix:' total', pager_page_mid:' · page ', pager_page_of:' / ', pager_page_suffix:'',
+      pager_total_prefix:'', pager_total_suffix:' total', pager_filter_prefix:' (', pager_filter_suffix:')', pager_page_mid:' · page ', pager_page_of:' / ', pager_page_suffix:'',
       unban_confirm_title:'Confirm unban', unban_confirm_body_prefix:'Re-enable account:\n',
       unban_failed:'Unban failed', unban_success_title:'Unban succeeded',
       unban_missing:'Account is no longer in the CPA auth list; local ban record cleared',
@@ -2389,7 +2389,7 @@ func renderUIPage(pluginID string) []byte {
     if (pager) {
       pager.innerHTML =
         '<div class="pager-meta pager-meta-row">' + t('pager_total_prefix') + list.length + t('pager_total_suffix') +
-        ((banState.filter && banState.filter !== 'all') ? ('（' + banFilterLabel(banState.filter) + '）') : '') +
+        ((banState.filter && banState.filter !== 'all') ? (t('pager_filter_prefix') + banFilterLabel(banState.filter) + t('pager_filter_suffix')) : '') +
         t('pager_page_mid') + banState.page + t('pager_page_of') + pages + t('pager_page_suffix') +
         t('per_page') + '<select id="banPageSize">' +
         [20,50,100].map((n) => '<option value="' + n + '"' + (size===n?' selected':'') + '>' + n + '</option>').join('') +

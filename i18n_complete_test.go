@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -985,5 +986,70 @@ func TestUIStopBodyIncludesLangAndActionErrorLocalizer(t *testing.T) {
 	}
 	if !strings.Contains(page, ".map(localizeKnownActionError)") {
 		t.Fatal("completedErrors must re-localize known action errors")
+	}
+}
+
+// extractI18NPack pulls string keys from the renderUIPage I18N.<lang> object literal.
+func extractI18NPack(page, lang string) map[string]string {
+	marker := lang + ": {"
+	idx := strings.Index(page, "const I18N = {")
+	if idx < 0 {
+		return nil
+	}
+	// Prefer the main I18N object (not REASON_I18N).
+	sub := page[idx:]
+	langIdx := strings.Index(sub, marker)
+	if langIdx < 0 {
+		return nil
+	}
+	// Find matching closing of this language object: start after marker, track braces.
+	start := langIdx + len(marker)
+	depth := 1
+	end := -1
+	for i := start; i < len(sub); i++ {
+		switch sub[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				end = i
+				i = len(sub)
+			}
+		}
+	}
+	if end < 0 {
+		return nil
+	}
+	body := sub[start:end]
+	out := map[string]string{}
+	// key:'value' or key: 'value' — values may contain escaped quotes rarely; keep simple.
+	// Match key:'...' pairs; allow commas and newlines.
+	re := regexp.MustCompile(`([A-Za-z0-9_]+)\s*:\s*'((?:\\'|[^'])*)'`)
+	for _, m := range re.FindAllStringSubmatch(body, -1) {
+		key := m[1]
+		val := strings.ReplaceAll(m[2], `\'`, `'`)
+		out[key] = val
+	}
+	return out
+}
+
+func TestBanPagerFilterParensAreI18n(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	// Hardcoded fullwidth parentheses around ban filter label must be gone.
+	if strings.Contains(page, "('（' + banFilterLabel") || strings.Contains(page, "banFilterLabel(banState.filter) + '）'") {
+		t.Fatal("ban pager filter summary still hardcodes fullwidth parentheses")
+	}
+	if !strings.Contains(page, "t('pager_filter_prefix')") || !strings.Contains(page, "t('pager_filter_suffix')") {
+		t.Fatal("ban pager filter summary must use pager_filter_prefix/suffix i18n keys")
+	}
+	// Both language packs must define the keys with language-appropriate brackets.
+	zh := extractI18NPack(page, "zh")
+	en := extractI18NPack(page, "en")
+	if zh["pager_filter_prefix"] != "（" || zh["pager_filter_suffix"] != "）" {
+		t.Fatalf("zh pager_filter_* = %q/%q, want fullwidth parentheses", zh["pager_filter_prefix"], zh["pager_filter_suffix"])
+	}
+	if en["pager_filter_prefix"] != " (" || en["pager_filter_suffix"] != ")" {
+		t.Fatalf("en pager_filter_* = %q/%q, want ASCII parentheses with leading space on open", en["pager_filter_prefix"], en["pager_filter_suffix"])
 	}
 }

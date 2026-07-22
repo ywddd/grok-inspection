@@ -478,8 +478,8 @@ func cloneHTTPHeader(src http.Header) http.Header {
 }
 
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
+	lang := normalizeLang(req.Lang)
 	e.mu.Lock()
-	lang := e.lang
 	if e.running || e.applying || e.applyDraining || e.actionInFlight > 0 {
 		e.mu.Unlock()
 		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_generic")))
@@ -506,6 +506,7 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 	e.applying = true
 	e.applyRunID++
 	applyID := e.applyRunID
+	e.applyLang = lang
 	e.applyDone = 0
 	e.applyTotal = len(candidates)
 	e.applyCurrent = ""
@@ -518,7 +519,8 @@ func (e *inspectionEngine) startApply(req applyRequest, password string, headers
 
 	go func() {
 		defer e.runWG.Done()
-		e.runApply(applyID, candidates, password, headers)
+		// Capture lang for this job so concurrent inspection/lang changes cannot rewrite progress.
+		e.runApply(applyID, candidates, password, headers, lang)
 	}()
 	return nil
 }
@@ -539,8 +541,8 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 	}
 	key := firstNonEmpty(req.AuthIndex, req.Name, name)
 
+	lang := normalizeLang(req.Lang)
 	e.mu.Lock()
-	lang := e.lang
 	if e.running {
 		e.mu.Unlock()
 		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_inspection")))
@@ -602,21 +604,22 @@ func (e *inspectionEngine) isApplyActive(applyID uint64) bool {
 	return e.applying && e.applyRunID == applyID
 }
 
-func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, password string, headers http.Header) {
+func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, password string, headers http.Header, lang Lang) {
+	lang = normalizeLang(string(lang))
 	defer func() {
 		// Bulk enable/delete skip per-account ban saves; flush once before the
 		// job becomes idle so a failed flush is part of the completed status.
 		banSaveErr := saveActiveStoreErr()
 		e.mu.Lock()
 		if banSaveErr != nil {
-			e.applyFailures = append(e.applyFailures, T(e.lang, "save_autoban_state_failed", banSaveErr.Error()))
+			e.applyFailures = append(e.applyFailures, T(lang, "save_autoban_state_failed", banSaveErr.Error()))
 			if len(e.applyFailures) > 20 {
 				e.applyFailures = e.applyFailures[:20]
 			}
 		}
 		if e.applyRunID == applyID {
 			e.applying = false
-			if e.applyCurrent != T(e.lang, "stopped") {
+			if e.applyCurrent != T(lang, "stopped") {
 				e.applyCurrent = ""
 			}
 		}
@@ -653,7 +656,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 			e.mu.Unlock()
 			return
 		}
-		e.applyCurrent = T(e.lang, "apply_delete_batch", i+1, end, len(deletes))
+		e.applyCurrent = T(lang, "apply_delete_batch", i+1, end, len(deletes))
 		e.mu.Unlock()
 
 		batchFails := deleteAuthFilesBatch(chunk, password, headers, false)
@@ -712,7 +715,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 				e.mu.Unlock()
 				return
 			}
-			e.applyCurrent = localizedActionVerb(e.lang, item.Action) + " " + item.Name
+			e.applyCurrent = localizedActionVerb(lang, item.Action) + " " + item.Name
 			e.mu.Unlock()
 
 			// Prefer physical auth file name so CPA Auth dir entry is deleted correctly.

@@ -975,11 +975,12 @@ func renderUIPage(pluginID string) []byte {
         return formatProbeTimeout(dur);
       }
     }
-    // Formatted: list accounts failed
+    // Formatted: list accounts failed (detail may itself be a known reason, e.g. list timeout)
     for (const cat of catalogs) {
       const prefix = cat.list_accounts_failed_prefix;
       if (prefix && reason.indexOf(prefix) === 0) {
-        return formatListAccountsFailed(reason.slice(prefix.length));
+        const detail = localizeKnownReason(reason.slice(prefix.length));
+        return formatListAccountsFailed(detail);
       }
     }
     const keys = Object.keys(REASON_I18N.zh).filter((k) => !skip[k]);
@@ -1534,7 +1535,8 @@ func renderUIPage(pluginID string) []byte {
           auth_index: r.auth_index || '',
           name: actionTargetName(r),
           disabled: act === 'disable',
-          delete: act === 'delete'
+          delete: act === 'delete',
+          lang: lang
         })
       });
       if (!result || result.ok === false) {
@@ -1615,7 +1617,8 @@ func renderUIPage(pluginID string) []byte {
         method: 'POST',
         body: JSON.stringify({
           force_action: action,
-          auth_indexes: indexes
+          auth_indexes: indexes,
+          lang: lang
         })
       });
       const total = Number(result && result.apply_total || indexes.length || 0);
@@ -2116,7 +2119,7 @@ func renderUIPage(pluginID string) []byte {
     );
     if (!ok) return;
     try {
-      const result = await api('/apply', { method: 'POST', body: '{}' });
+      const result = await api('/apply', { method: 'POST', body: JSON.stringify({ lang: lang }) });
       const total = Number(result && result.apply_total || 0);
       if (result && result.ok === false) throw new Error(result.error || t('start_failed'));
       showOk(total ? (t('suggested_running_prefix') + total + t('items_word')) : t('suggested_started'));

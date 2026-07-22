@@ -262,7 +262,7 @@ func TestBulkEnableAndDeleteClearBansOnce(t *testing.T) {
 	engine.applyTotal = len(cands)
 	engine.mu.Unlock()
 	t.Cleanup(func() { engine.waitAsyncPersist() })
-	engine.runApply(applyID, cands, "test-pass", nil)
+	engine.runApply(applyID, cands, "test-pass", nil, LangZH)
 	engine.waitAsyncPersist()
 
 	if _, ok := activeStore.Get("e1.json"); ok {
@@ -504,7 +504,7 @@ func TestRunApplyReportsBanStoreSaveFailure(t *testing.T) {
 	currentConfig.Store(cfg)
 	t.Cleanup(func() { currentConfig.Store(oldCfg) })
 
-	engine.runApply(applyID, nil, "", nil)
+	engine.runApply(applyID, nil, "", nil, LangZH)
 	engine.waitAsyncPersist()
 	engine.mu.Lock()
 	failures := append([]string(nil), engine.applyFailures...)

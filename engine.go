@@ -140,6 +140,9 @@ type startRequest struct {
 }
 
 type applyRequest struct {
+	// Lang is request-scoped operator language for busy/progress copy (default zh).
+	// Independent of the last inspection run language.
+	Lang string `json:"lang"`
 	// empty AuthIndexes means apply all matching recommended actions (when ForceAction empty)
 	AuthIndexes     []string `json:"auth_indexes"`
 	Actions         []string `json:"actions"`         // optional: disable/enable/delete (recommended only)
@@ -150,6 +153,8 @@ type applyRequest struct {
 }
 
 type actionRequest struct {
+	// Lang is request-scoped operator language for busy errors (default zh).
+	Lang      string `json:"lang"`
 	AuthIndex string `json:"auth_index"`
 	Name      string `json:"name"`
 	Disabled  bool   `json:"disabled"`
@@ -161,7 +166,8 @@ type authListResponse struct {
 }
 
 type inspectionEngine struct {
-	lang             Lang // operator-facing language for this run (default zh)
+	lang             Lang // operator-facing language for the current/last inspection run (default zh)
+	applyLang        Lang // language for the active bulk-apply job (request-scoped)
 	mu               sync.Mutex
 	runWG            sync.WaitGroup
 	persistWG        sync.WaitGroup // async persistLocked writers
@@ -574,7 +580,12 @@ func (e *inspectionEngine) stop() {
 		e.applyRunID++
 		e.applying = false
 		e.applyDraining = true
-		e.applyCurrent = T(e.lang, "stopped")
+		// Stop copy follows the apply job language, not the last inspection language.
+		stopLang := e.applyLang
+		if stopLang == "" {
+			stopLang = e.lang
+		}
+		e.applyCurrent = T(stopLang, "stopped")
 	}
 	if !e.running {
 		snap := e.copyPersistedLocked()

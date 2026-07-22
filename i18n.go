@@ -350,6 +350,8 @@ func localizeFormattedReason(lang Lang, reason string) (string, bool) {
 		}
 		if strings.HasPrefix(reason, prefix) {
 			detail := strings.TrimPrefix(reason, prefix)
+			// Nested known reasons (e.g. list-timeout) must translate fully, not only the outer prefix.
+			detail = localizeKnownReason(lang, detail)
 			return T(lang, "list_accounts_failed", detail), true
 		}
 	}

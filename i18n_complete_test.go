@@ -440,3 +440,151 @@ func TestUIExportLocalizesReason(t *testing.T) {
 		t.Fatal("export path must localize reason via localizeKnownReason")
 	}
 }
+
+func TestLocalizeNestedListAccountsTimeout(t *testing.T) {
+	zhNested := T(LangZH, "list_accounts_failed", T(LangZH, "list_accounts_timeout"))
+	enNested := T(LangEN, "list_accounts_failed", T(LangEN, "list_accounts_timeout"))
+	// Sanity: nested Chinese form matches the historical stored shape.
+	if zhNested != "列出账号失败: 列出账号超时（30s）" {
+		t.Fatalf("zh nested shape = %q", zhNested)
+	}
+	if enNested != "Failed to list accounts: Listing accounts timed out (30s)" {
+		t.Fatalf("en nested shape = %q", enNested)
+	}
+	if got := localizeKnownReason(LangEN, zhNested); got != enNested {
+		t.Fatalf("zh nested -> en = %q, want %q", got, enNested)
+	}
+	if got := localizeKnownReason(LangZH, enNested); got != zhNested {
+		t.Fatalf("en nested -> zh = %q, want %q", got, zhNested)
+	}
+	// Mixed historical form: Chinese outer + English detail (and reverse) should still normalize.
+	mixed := "列出账号失败: " + T(LangEN, "list_accounts_timeout")
+	if got := localizeKnownReason(LangEN, mixed); got != enNested {
+		t.Fatalf("mixed zh-outer/en-detail -> en = %q, want %q", got, enNested)
+	}
+	if got := localizeKnownReason(LangZH, mixed); got != zhNested {
+		t.Fatalf("mixed zh-outer/en-detail -> zh = %q, want %q", got, zhNested)
+	}
+}
+
+func TestApplyActionBusyUsesRequestLangWithoutInspectionHistory(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{workers: defaultWorkers} // lang zero / zh default, no inspection history
+	// Force unban busy so apply/action return localized busy without needing a running apply.
+	unbanJob.mu.Lock()
+	prev := unbanJob.running
+	unbanJob.running = true
+	unbanJob.mu.Unlock()
+	t.Cleanup(func() {
+		unbanJob.mu.Lock()
+		unbanJob.running = prev
+		unbanJob.mu.Unlock()
+		engine = old
+	})
+
+	errApply := engine.startApply(applyRequest{Lang: "en", ForceAction: "disable", AuthIndexes: []string{"a"}}, "pw", nil)
+	if errApply == nil {
+		t.Fatal("expected apply busy")
+	}
+	if errApply.Error() != T(LangEN, "busy_unban") {
+		t.Fatalf("apply busy en = %q, want %q", errApply.Error(), T(LangEN, "busy_unban"))
+	}
+
+	_, _, errAction := engine.startAction(actionRequest{Lang: "en", Name: "a.json", Disabled: true}, "pw", nil)
+	if errAction == nil {
+		t.Fatal("expected action busy")
+	}
+	if errAction.Error() != T(LangEN, "busy_unban") {
+		t.Fatalf("action busy en = %q, want %q", errAction.Error(), T(LangEN, "busy_unban"))
+	}
+
+	// Chinese request language must not fall back to leftover English apply language.
+	errApplyZH := engine.startApply(applyRequest{Lang: "zh", ForceAction: "disable", AuthIndexes: []string{"a"}}, "pw", nil)
+	if errApplyZH == nil || errApplyZH.Error() != T(LangZH, "busy_unban") {
+		t.Fatalf("apply busy zh = %v", errApplyZH)
+	}
+}
+
+func TestApplyProgressUsesRequestLangNotInspectionLang(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{
+		workers: defaultWorkers,
+		lang:    LangZH, // previous inspection was Chinese
+		results: []accountResult{{
+			AuthIndex: "1", Name: "a.json", FileName: "a.json",
+			Classification: "quota_exhausted", Action: "disable", Disabled: false,
+		}},
+	}
+	t.Cleanup(func() { engine = old })
+
+	// Patch ban save / CPA calls out of the way by using force delete with stubbed batch that no-ops.
+	// We only need applyLang + first progress string assignment path: startApply should set applyLang=en.
+	if err := engine.startApply(applyRequest{
+		Lang:        "en",
+		ForceAction: "disable",
+		AuthIndexes: []string{"1"},
+	}, "pw", nil); err != nil {
+		t.Fatalf("startApply: %v", err)
+	}
+	// Wait briefly for goroutine to set progress or finish.
+	deadline := time.Now().Add(2 * time.Second)
+	var current string
+	var applyLang Lang
+	for time.Now().Before(deadline) {
+		engine.mu.Lock()
+		current = engine.applyCurrent
+		applyLang = engine.applyLang
+		applying := engine.applying || engine.applyDraining
+		engine.mu.Unlock()
+		if applyLang == LangEN {
+			break
+		}
+		if !applying && applyLang == LangEN {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if applyLang != LangEN {
+		t.Fatalf("applyLang = %q, want en (request-scoped, not inspection zh)", applyLang)
+	}
+	// Stop should use apply language for stopped marker when apply still active.
+	engine.mu.Lock()
+	engine.applying = true
+	engine.applyLang = LangEN
+	engine.mu.Unlock()
+	engine.stop()
+	engine.mu.Lock()
+	stopped := engine.applyCurrent
+	engine.mu.Unlock()
+	if stopped != T(LangEN, "stopped") {
+		t.Fatalf("stop applyCurrent = %q, want %q", stopped, T(LangEN, "stopped"))
+	}
+	_ = current
+}
+
+func TestUIApplyActionBodiesIncludeLang(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, "lang: lang") {
+		t.Fatal("UI must send lang on apply/action bodies")
+	}
+	if !strings.Contains(page, "JSON.stringify({ lang: lang })") {
+		t.Fatal("suggested apply body must include lang")
+	}
+	if !strings.Contains(page, "const detail = localizeKnownReason(reason.slice(prefix.length));") {
+		t.Fatal("JS must recursively localize list-failed detail")
+	}
+	if !strings.Contains(page, "return formatListAccountsFailed(detail);") {
+		t.Fatal("JS must re-wrap localized list-failed detail")
+	}
+	actionIdx := strings.Index(page, "api('/action'")
+	applyForceIdx := strings.Index(page, "force_action: action")
+	if actionIdx < 0 || applyForceIdx < 0 {
+		t.Fatal("action/apply markers missing")
+	}
+	if !strings.Contains(page[actionIdx:actionIdx+350], "lang: lang") {
+		t.Fatal("action POST body missing lang")
+	}
+	if !strings.Contains(page[applyForceIdx:applyForceIdx+200], "lang: lang") {
+		t.Fatal("force apply POST body missing lang")
+	}
+}

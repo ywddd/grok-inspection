@@ -24,12 +24,13 @@ Chinese documentation remains in [README.md](README.md).
 ## Features
 
 - Full, incremental, and classification-scoped inspection for Grok/xAI accounts
-- Detects healthy, permission denied, free-usage exhausted, reauth required, model unavailable, and probe errors
+- Scheduled inspection with configurable interval, concurrency, disabled-account inclusion, and disable/delete actions for 402/403 results
+- Detects healthy, 402 spending/subscription limit, permission denied, free-usage exhausted, reauth required, model unavailable, and probe errors
 - Background inspection and bulk actions continue if you leave the page
 - One-click suggested actions, bulk disable/delete, and single-account actions
 - Results are persisted and restored when you reopen the page
 - Export filtered results as JSON/TXT
-- Real-time autoban (on by default): free-usage cools down after 24h; 403/401 need manual unban
+- Real-time autoban (on by default): free-usage cools down after 24h; 402/403/401 need manual unban
 
 ## Install
 
@@ -100,6 +101,7 @@ Inspection and bulk actions run in the background. Closing or switching pages do
 |--------|--------------------|---------|
 | Healthy | Keep; enable if currently disabled | Chat probe succeeded |
 | Permission denied | Disable | Chat permission denied or account restricted |
+| 402 spending limit | Disable | `personal-team-blocked:spending-limit`; manual unban only |
 | Free-usage exhausted | Disable | Free usage is exhausted for now |
 | Reauth required | Delete | Login/token is invalid; re-login in CPA after delete |
 | Model unavailable | Keep | Probe model unavailable; account may still be fine |
@@ -112,7 +114,7 @@ Inspection and bulk actions run in the background. Closing or switching pages do
 
 - Results are stored at `data/grok-inspection/results.json` under the CPA working directory
 - Result files store display fields only, not full tokens
-- Real-time autoban is on by default: free-usage-exhausted / permission-denied / 401 are auto-disabled (toggle off on the Autoban page). Inspection suggested actions still require confirmation
+- Real-time autoban is on by default: free-usage-exhausted / personal-team-blocked:spending-limit / permission-denied / 401 are auto-disabled (toggle off on the Autoban page). Inspection suggested actions still require confirmation
 - Delete removes the CPA auth credential; recovery requires re-login
 
 ## License

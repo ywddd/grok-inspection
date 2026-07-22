@@ -70,6 +70,10 @@ func findAuthFile(name string) (*pluginapi.HostAuthFileEntry, error) {
 // re-list all auth files (that was the main reason single-row ops felt slow).
 // persist=false is used by bulk apply so 1000 disk flushes do not dominate runtime.
 func setAuthDisabled(name string, disabled bool, password string, headers http.Header, persist bool) error {
+	return setAuthDisabledWithBanReason(name, disabled, password, headers, persist, manualInspectionBanErrorCode)
+}
+
+func setAuthDisabledWithBanReason(name string, disabled bool, password string, headers http.Header, persist bool, banErrorCode string) error {
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		return errTarget
@@ -99,21 +103,65 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 		}
 	}
 	engine.bumpResultsLocked()
-	bansRemoved := 0
-	if !disabled {
+	banStateChanged := false
+	if disabled {
+		banStateChanged = syncInspectionBan(activeStore, target, name, time.Now(), banErrorCode)
+	} else {
 		// Inspection force-enable must drop autoban pool row so both pages stay aligned.
-		bansRemoved = clearBansMatchingTarget(target, name)
+		banStateChanged = clearBansMatchingTarget(target, name) > 0
 	}
 	if persist {
 		engine.persistLocked()
 	}
 	engine.mu.Unlock()
-	if bansRemoved > 0 && persist {
+	if banStateChanged && persist {
 		if err := saveActiveStoreErr(); err != nil {
-			return fmt.Errorf("enabled in CPA but failed to persist ban state: %w", err)
+			return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
 		}
 	}
 	return nil
+}
+
+// syncManualInspectionBan records an inspection-triggered manual disable in
+// the existing auto-ban pool. It never creates a second source of ban state.
+func syncManualInspectionBan(store *banStore, target *pluginapi.HostAuthFileEntry, fallback string, now time.Time) bool {
+	return syncInspectionBan(store, target, fallback, now, manualInspectionBanErrorCode)
+}
+
+func syncInspectionBan(store *banStore, target *pluginapi.HostAuthFileEntry, fallback string, now time.Time, errorCode string) bool {
+	if store == nil {
+		return false
+	}
+	errorCode = strings.TrimSpace(errorCode)
+	if errorCode == "" {
+		errorCode = manualInspectionBanErrorCode
+	}
+	authID := strings.TrimSpace(fallback)
+	provider := "xai"
+	if target != nil {
+		authID = firstNonEmpty(target.Name, target.ID, fallback, target.AuthIndex, target.Email)
+		if normalized := normalizeProvider(target.Provider); normalized != "" {
+			provider = normalized
+		}
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return false
+	}
+
+	// Collapse an older entry keyed by another alias before writing the canonical
+	// file-name key, so the same account cannot appear twice in the shared pool.
+	clearBansMatchingTargetInStore(store, target, fallback)
+	store.Set(banEntry{
+		AuthID:      authID,
+		Provider:    provider,
+		ErrorCode:   errorCode,
+		BannedAt:    now,
+		ResetAt:     now.AddDate(100, 0, 0),
+		ResetSource: manualInspectionBanResetSource,
+		CpaSynced:   true,
+	})
+	return true
 }
 
 func resultMatchesTarget(item accountResult, target *pluginapi.HostAuthFileEntry, name string) bool {
@@ -141,6 +189,13 @@ func resultMatchesTarget(item accountResult, target *pluginapi.HostAuthFileEntry
 // AuthIDs in the ban store are typically file names; match AuthIndex/Name/ID/request aliases.
 // Returns how many ban entries were removed. Caller decides when to persist ban state.
 func clearBansMatchingTarget(target *pluginapi.HostAuthFileEntry, name string) int {
+	return clearBansMatchingTargetInStore(activeStore, target, name)
+}
+
+func clearBansMatchingTargetInStore(store *banStore, target *pluginapi.HostAuthFileEntry, name string) int {
+	if store == nil {
+		return 0
+	}
 	aliases := map[string]struct{}{}
 	add := func(v string) {
 		v = strings.TrimSpace(v)
@@ -160,13 +215,13 @@ func clearBansMatchingTarget(target *pluginapi.HostAuthFileEntry, name string) i
 		return 0
 	}
 	removed := 0
-	for _, entry := range activeStore.All() {
+	for _, entry := range store.All() {
 		id := strings.TrimSpace(entry.AuthID)
 		if id == "" {
 			continue
 		}
 		if _, ok := aliases[id]; ok {
-			if activeStore.Delete(id) {
+			if store.Delete(id) {
 				removed++
 			}
 			continue
@@ -177,7 +232,7 @@ func clearBansMatchingTarget(target *pluginapi.HostAuthFileEntry, name string) i
 			base = id[i+1:]
 		}
 		if _, ok := aliases[base]; ok {
-			if activeStore.Delete(id) {
+			if store.Delete(id) {
 				removed++
 			}
 		}
@@ -448,6 +503,7 @@ func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult,
 		if force != "" {
 			copied := item
 			copied.Action = force
+			copied.BanErrorCode = req.BanErrorCode
 			candidates = append(candidates, copied)
 			continue
 		}
@@ -724,7 +780,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 			var errAction error
 			switch item.Action {
 			case "disable":
-				errAction = setAuthDisabled(targetName, true, password, headers, false)
+				errAction = setAuthDisabledWithBanReason(targetName, true, password, headers, false, item.BanErrorCode)
 			case "enable":
 				errAction = setAuthDisabled(targetName, false, password, headers, false)
 			default:

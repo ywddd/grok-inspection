@@ -13,14 +13,15 @@ const storeVersion = 1
 // persistedSnapshot is the on-disk form of the last inspection results.
 // JSON file is used instead of SQLite for minimal deps and fast full-list read/write.
 type persistedSnapshot struct {
-	Version         int             `json:"version"`
-	Workers         int             `json:"workers"`
-	IncludeDisabled bool            `json:"include_disabled"`
-	OnlyDisabled    bool            `json:"only_disabled"`
-	StartedAt       string          `json:"started_at,omitempty"`
-	FinishedAt      string          `json:"finished_at,omitempty"`
-	Results         []accountResult `json:"results"`
-	SavedAt         string          `json:"saved_at"`
+	Version         int                         `json:"version"`
+	Workers         int                         `json:"workers"`
+	IncludeDisabled bool                        `json:"include_disabled"`
+	OnlyDisabled    bool                        `json:"only_disabled"`
+	StartedAt       string                      `json:"started_at,omitempty"`
+	FinishedAt      string                      `json:"finished_at,omitempty"`
+	Results         []accountResult             `json:"results"`
+	Schedule        persistedInspectionSchedule `json:"schedule,omitempty"`
+	SavedAt         string                      `json:"saved_at"`
 	// seq is assigned when the snapshot is taken (not when save starts).
 	// Stale async flushes must not overwrite a newer final snapshot.
 	seq uint64 `json:"-"`

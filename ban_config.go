@@ -220,6 +220,7 @@ func configure(raw []byte) error {
 	cfg = applyRuntimeSettings(cfg)
 	currentConfig.Store(cfg)
 	loadBanState(cfg)
+	startInspectionScheduleLoop()
 	return nil
 }
 

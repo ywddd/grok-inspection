@@ -11,9 +11,12 @@ import (
 )
 
 const (
-	exhaustedErrorCode        = "subscription:free-usage-exhausted"
-	permissionDeniedErrorCode = "permission-denied"
-	unauthorizedErrorCode     = "unauthorized"
+	exhaustedErrorCode             = "subscription:free-usage-exhausted"
+	permissionDeniedErrorCode      = "permission-denied"
+	spendingLimitErrorCode         = "personal-team-blocked:spending-limit"
+	unauthorizedErrorCode          = "unauthorized"
+	manualInspectionBanErrorCode   = "manual-disabled"
+	manualInspectionBanResetSource = "manual_unban"
 )
 
 type banEntry struct {
@@ -80,6 +83,10 @@ func resolveBanWindow(status int, errorCode string, headers http.Header, now tim
 	case status == http.StatusForbidden && errorCode == permissionDeniedErrorCode:
 		// Permission issues are not temporary quota windows. Keep the account out of
 		// the pool until an operator unbans it manually.
+		return now.AddDate(100, 0, 0), "manual_unban", true
+	case status == http.StatusPaymentRequired && errorCode == spendingLimitErrorCode:
+		// Spending-limit / subscription blocks do not expose a reliable cooldown.
+		// Keep them disabled until an operator manually unbans the account.
 		return now.AddDate(100, 0, 0), "manual_unban", true
 	case status == http.StatusUnauthorized:
 		// Auth failures usually mean expired or invalid credentials. Keep the account

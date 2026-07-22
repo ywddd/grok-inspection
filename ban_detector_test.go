@@ -8,6 +8,8 @@ import (
 	"grok-inspection/cpasdk/pluginapi"
 )
 
+const realGrok402Body = `{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok."}`
+
 const realGrok429Body = `{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model grok-4.5-build-free for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 2050798/2000000. Upgrade to a Grok subscription for higher limits: https://grok.com/supergrok"}`
 const realGrok403Body = `{"code":"permission-denied","error":"Access to the chat endpoint is denied. Please ensure you're using the correct credentials. If you believe this is a mistake, please log into console.x.ai and update the permissions, or contact support."}`
 
@@ -114,6 +116,33 @@ func TestDetectGrokUnauthorized401(t *testing.T) {
 	}
 }
 
+func TestDetectRealGrokSpendingLimitRequiresManualUnban(t *testing.T) {
+	now := time.Date(2026, 7, 22, 16, 1, 53, 0, time.UTC)
+	record := pluginapi.UsageRecord{
+		Provider: "xai",
+		AuthID:   "xai-account-402",
+		Failed:   true,
+		Failure: pluginapi.UsageFailure{
+			StatusCode: 402,
+			Body:       realGrok402Body,
+		},
+	}
+
+	entry, ok := detectBan(record, defaultPluginConfig(), now)
+	if !ok {
+		t.Fatal("detectBan() did not match real Grok 402 spending limit")
+	}
+	if entry.ErrorCode != spendingLimitErrorCode {
+		t.Fatalf("error code = %q", entry.ErrorCode)
+	}
+	if entry.ResetSource != "manual_unban" {
+		t.Fatalf("reset source = %q", entry.ResetSource)
+	}
+	if !entry.ResetAt.Equal(now.AddDate(100, 0, 0)) {
+		t.Fatalf("reset at = %s, want far-future manual unban", entry.ResetAt)
+	}
+}
+
 func TestDetectBanRejectsNonExactMatches(t *testing.T) {
 	base := pluginapi.UsageRecord{
 		Provider: "xai",
@@ -152,6 +181,10 @@ func TestDetectBanRejectsNonExactMatches(t *testing.T) {
 			r.Failure.StatusCode = 429
 			r.Failure.Body = `{"code":"rate_limit"}`
 		}},
+		{"402 wrong code", func(r *pluginapi.UsageRecord) {
+			r.Failure.StatusCode = 402
+			r.Failure.Body = `{"code":"payment-required"}`
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,5 +218,35 @@ func TestDetectBanAcceptsGrokProviderAndUsesLocalFallback(t *testing.T) {
 	}
 	if !entry.ResetAt.Equal(now.Add(24*time.Hour)) || entry.ResetSource != "local_plus_fallback" {
 		t.Fatalf("entry = %#v", entry)
+	}
+}
+
+func TestDetectBanRejects402MessageOnly(t *testing.T) {
+	record := pluginapi.UsageRecord{
+		Provider: "xai",
+		AuthID:   "auth-msg-only",
+		Failed:   true,
+		Failure: pluginapi.UsageFailure{
+			StatusCode: 402,
+			Body:       `{"error":"personal-team-blocked:spending-limit You have run out of credits"}`,
+		},
+	}
+	if _, ok := detectBan(record, defaultPluginConfig(), time.Now()); ok {
+		t.Fatal("message-only 402 must not auto-ban")
+	}
+}
+
+func TestDetectBanRejects402SubstringCode(t *testing.T) {
+	record := pluginapi.UsageRecord{
+		Provider: "xai",
+		AuthID:   "auth-sub",
+		Failed:   true,
+		Failure: pluginapi.UsageFailure{
+			StatusCode: 402,
+			Body:       `{"code":"prefix-personal-team-blocked:spending-limit","error":"x"}`,
+		},
+	}
+	if _, ok := detectBan(record, defaultPluginConfig(), time.Now()); ok {
+		t.Fatal("substring spending-limit code must not auto-ban")
 	}
 }

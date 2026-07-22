@@ -83,10 +83,12 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},
-			{Method: http.MethodGet, Path: managementRoutePrefix + "/bans", Description: "List Grok accounts banned by free-usage / permission-denied / 401."},
+			{Method: http.MethodGet, Path: managementRoutePrefix + "/bans", Description: "List Grok accounts banned by free-usage / spending-limit / permission-denied / 401."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban", Description: "Unban one Grok account and re-enable it in CPA."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban-all", Description: "Unban all Grok accounts tracked by autoban."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/autoban-settings", Description: "Update autoban enabled switch and fallback hours."},
+			{Method: http.MethodGet, Path: managementRoutePrefix + "/schedule", Description: "Get scheduled full-inspection settings and status."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule", Description: "Update scheduled full-inspection settings."},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
@@ -198,6 +200,25 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		})
 	case method == http.MethodGet && matchesManagementPath(req.Path, "/bans"):
 		return jsonResponse(http.StatusOK, banStatus())
+	case method == http.MethodGet && matchesManagementPath(req.Path, "/schedule"):
+		rememberInspectionScheduleManagementKey(resolveManagementPassword(req.Headers))
+		return jsonResponse(http.StatusOK, inspectionScheduleStatus())
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/schedule"):
+		var body inspectionScheduleUpdate
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+			}
+		}
+		rememberInspectionScheduleManagementKey(resolveManagementPassword(req.Headers))
+		cfg, err := updateInspectionSchedule(body)
+		if err != nil {
+			return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error(), "ok": false})
+		}
+		status := inspectionScheduleStatus()
+		status["ok"] = true
+		status["enabled"] = cfg.Enabled
+		return jsonResponse(http.StatusOK, status)
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban"):
 		var body struct {
 			AuthID string `json:"auth_id"`

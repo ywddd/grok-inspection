@@ -250,8 +250,12 @@ func banCategoryOf(errorCode string) string {
 		return "quota"
 	case c == permissionDeniedErrorCode || strings.Contains(c, "permission-denied"):
 		return "permission"
+	case c == spendingLimitErrorCode || strings.Contains(c, "spending-limit"):
+		return "spending_limit"
 	case c == unauthorizedErrorCode || c == "401" || strings.Contains(c, "unauthorized"):
 		return "unauthorized"
+	case c == manualInspectionBanErrorCode || strings.Contains(c, "manual-disabled"):
+		return "manual"
 	default:
 		return "other"
 	}
@@ -264,7 +268,9 @@ func banStatus() map[string]any {
 	out := make([]map[string]any, 0, len(items))
 	quota := 0
 	permission := 0
+	spendingLimit := 0
 	unauthorized := 0
+	manualDisabled := 0
 	other := 0
 	pending := 0
 	for _, entry := range items {
@@ -279,8 +285,12 @@ func banStatus() map[string]any {
 			quota++
 		case "permission":
 			permission++
+		case "spending_limit":
+			spendingLimit++
 		case "unauthorized":
 			unauthorized++
+		case "manual":
+			manualDisabled++
 		default:
 			other++
 		}
@@ -306,21 +316,23 @@ func banStatus() map[string]any {
 	// pending_restore remains a separate field for the restore chip.
 	cfg := loadedConfig()
 	return map[string]any{
-		"plugin":              pluginName,
-		"enabled":             cfg.Enabled,
-		"fallback_hours":      cfg.FallbackHours,
-		"persist_state":       cfg.PersistState,
-		"state_file":          cfg.StateFile,
-		"log_matches":         cfg.LogMatches,
-		"count":               len(out),
-		"quota_count":         quota,
-		"permission_count":    permission,
-		"unauthorized_count":  unauthorized,
-		"other_count":         other,
+		"plugin":                pluginName,
+		"enabled":               cfg.Enabled,
+		"fallback_hours":        cfg.FallbackHours,
+		"persist_state":         cfg.PersistState,
+		"state_file":            cfg.StateFile,
+		"log_matches":           cfg.LogMatches,
+		"count":                 len(out),
+		"quota_count":           quota,
+		"permission_count":      permission,
+		"spending_limit_count":  spendingLimit,
+		"unauthorized_count":    unauthorized,
+		"manual_disabled_count": manualDisabled,
+		"other_count":           other,
 		// manual_count kept for older UI clients: permission + unauthorized
-		"manual_count":        permission + unauthorized,
-		"pending_restore":     pending,
-		"unsynced_count":      len(activeStore.UnsyncedCPA()),
-		"bans":                out,
+		"manual_count":    permission + unauthorized,
+		"pending_restore": pending,
+		"unsynced_count":  len(activeStore.UnsyncedCPA()),
+		"bans":            out,
 	}
 }

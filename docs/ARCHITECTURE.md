@@ -84,7 +84,7 @@ Fallback is used only when the primary result is **ambiguous** (temporary 429, 5
 POST https://cli-chat-proxy.grok.com/v1/chat/completions
 ```
 
-Definitive primary results skip fallback: `healthy`, `quota_exhausted` (free-usage only), `permission_denied`, `reauth`. When both are tried, free-usage / permission / reauth from primary remain authoritative if fallback returns success.
+Definitive primary results skip fallback: `healthy`, `quota_exhausted` (free-usage only), `spending_limit`, `permission_denied`, `reauth`. When both are tried, free-usage / spending-limit / permission / reauth from primary remain authoritative if fallback returns success.
 
 The probe classifies HTTP status and structured error fields. It does not rely on natural-language model output.
 
@@ -93,7 +93,8 @@ The probe classifies HTTP status and structured error fields. It does not rely o
 | Classification | Default action | Main signal |
 |----------------|----------------|-------------|
 | `healthy` | `keep`, or `enable` if currently disabled | Probe returned 2xx |
-| `permission_denied` | `disable`, or `keep` if already disabled | 402/403 or permission/banned/suspended text |
+| `permission_denied` | `disable`, or `keep` if already disabled | 403 permission-denied or permission/banned/suspended text |
+| `spending_limit` | `disable`, or `keep` if already disabled | HTTP 402 with `personal-team-blocked:spending-limit`; manual unban only |
 | `quota_exhausted` | `disable`, or `keep` if already disabled | Only Grok free-usage body/code (`subscription:free-usage-exhausted`, `free-usage-exhausted`, included free usage exhausted). Bare HTTP 429 is **not** quota |
 | `reauth` | `delete` | 401 or expired/invalid token text |
 | `model_unavailable` | `keep` | 404 or model unavailable text |

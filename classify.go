@@ -47,7 +47,9 @@ func containsAny(text string, needles ...string) bool {
 
 // isFreeUsageExhausted reports true only for Grok free-tier exhaustion.
 // Real example:
-//   {"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model ..."}
+//
+//	{"code":"subscription:free-usage-exhausted","error":"You've used all the included free usage for model ..."}
+//
 // Bare HTTP 429 / generic rate-limit text must not match.
 func isFreeUsageExhausted(code, message string) bool {
 	blob := lower(code) + " " + lower(message)
@@ -57,6 +59,17 @@ func isFreeUsageExhausted(code, message string) bool {
 		"used all the included free usage",
 		"included free usage has been exhausted",
 	)
+}
+
+// isSpendingLimitBlocked reports true only for the exact Grok spending-limit code.
+// Real example:
+//
+//	HTTP 402 {"code":"personal-team-blocked:spending-limit","error":"You have run out of credits..."}
+//
+// Message text alone must not match; bare / unknown 402 must not match.
+func isSpendingLimitBlocked(code, message string) bool {
+	_ = message
+	return lower(code) == spendingLimitErrorCode
 }
 
 func isXAIEntry(provider, name, entryType string) bool {
@@ -136,7 +149,6 @@ func truncateErrMessage(value string, max int) string {
 	return string(r[:max]) + "…"
 }
 
-
 // recommendAction maps classification + disabled flag to the UI suggested action.
 // Used after force enable/disable so recommendations stay consistent with probe results.
 func recommendAction(classification string, disabled bool) string {
@@ -146,7 +158,7 @@ func recommendAction(classification string, disabled bool) string {
 			return "enable"
 		}
 		return "keep"
-	case "quota_exhausted", "permission_denied":
+	case "quota_exhausted", "permission_denied", "spending_limit":
 		if disabled {
 			return "keep"
 		}
@@ -187,7 +199,18 @@ func classifyProbe(input classifyInput) classifyResult {
 			Reason:         T(input.Lang, "temp_rate_limited"),
 		}
 	}
-	if status == http.StatusPaymentRequired || status == http.StatusForbidden || containsAny(blob,
+	// HTTP 402: only exact personal-team-blocked:spending-limit is actionable.
+	// Other 402 responses must not fall into permission_denied heuristics.
+	if status == http.StatusPaymentRequired {
+		if isSpendingLimitBlocked(input.ChatCode, input.ChatError) {
+			action := "disable"
+			if disabled {
+				action = "keep"
+			}
+			reason := T(input.Lang, "spending_limit")
+			return classifyResult{Classification: "spending_limit", Action: action, Reason: fmt.Sprintf("%s (HTTP %d)", reason, status)}
+		}
+	} else if status == http.StatusForbidden || containsAny(blob,
 		"permission-denied",
 		"chat endpoint is denied",
 		"deactivated",

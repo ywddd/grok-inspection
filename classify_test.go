@@ -9,7 +9,7 @@ import (
 
 func TestClassifyPermissionDenied(t *testing.T) {
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: 403,
 		ChatCode:   "permission-denied",
 		ChatError:  "Access to the chat endpoint is denied",
@@ -20,9 +20,46 @@ func TestClassifyPermissionDenied(t *testing.T) {
 	}
 }
 
+func TestClassifySpendingLimit402Separately(t *testing.T) {
+	got := classifyProbe(classifyInput{
+		Lang:       LangZH,
+		ChatStatus: http.StatusPaymentRequired,
+		ChatCode:   spendingLimitErrorCode,
+		ChatError:  "You have run out of credits or need a Grok subscription",
+	})
+	if got.Classification != "spending_limit" || got.Action != "disable" {
+		t.Fatalf("got %+v", got)
+	}
+
+	disabled := classifyProbe(classifyInput{
+		Lang:       LangZH,
+		ChatStatus: http.StatusPaymentRequired,
+		ChatCode:   spendingLimitErrorCode,
+		Disabled:   true,
+	})
+	if disabled.Classification != "spending_limit" || disabled.Action != "keep" {
+		t.Fatalf("disabled account got %+v", disabled)
+	}
+}
+
+func TestClassifyUnknown402IsNotPermissionDenied(t *testing.T) {
+	got := classifyProbe(classifyInput{
+		Lang:       LangZH,
+		ChatStatus: http.StatusPaymentRequired,
+		ChatCode:   "payment-required",
+		ChatError:  "payment required",
+	})
+	if got.Classification == "permission_denied" || got.Classification == "spending_limit" {
+		t.Fatalf("unknown 402 must not be permission_denied/spending_limit: %+v", got)
+	}
+	if got.Action != "keep" {
+		t.Fatalf("unknown 402 action=%q want keep", got.Action)
+	}
+}
+
 func TestClassifyReauthRecommendsDelete(t *testing.T) {
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: http.StatusUnauthorized,
 		ChatError:  "Invalid or expired credentials",
 	})
@@ -110,7 +147,7 @@ func TestResolveProbeOutcomeUsesFallbackForAmbiguousPrimary(t *testing.T) {
 
 func TestClassifyBare429IsProbeErrorNotQuota(t *testing.T) {
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatError:  "rate limited",
 	})
@@ -121,7 +158,7 @@ func TestClassifyBare429IsProbeErrorNotQuota(t *testing.T) {
 
 func TestClassifyFreeUsageExhaustedIsQuota(t *testing.T) {
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   "free-usage-exhausted",
 		ChatError:  "Included free usage has been exhausted",
@@ -148,7 +185,7 @@ func TestResolveProbeOutcomeUsesFallbackWhenPrimaryBare429(t *testing.T) {
 
 func TestClassifyGenericQuotaTextIsNotQuotaExhausted(t *testing.T) {
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   "rate_limit",
 		ChatError:  "usage_limit_reached / quota exhausted",
@@ -192,7 +229,7 @@ func TestClassifyRealGrokFreeUsagePayload(t *testing.T) {
 		t.Fatalf("should match free usage, code=%q msg=%q", parsed.Code, parsed.Message)
 	}
 	got := classifyProbe(classifyInput{
-		Lang: LangZH,
+		Lang:       LangZH,
 		ChatStatus: http.StatusTooManyRequests,
 		ChatCode:   parsed.Code,
 		ChatError:  parsed.Message,
@@ -248,3 +285,52 @@ func TestExtractErrorKeepsRealError(t *testing.T) {
 	}
 }
 
+func TestIsSpendingLimitBlockedExactOnly(t *testing.T) {
+	if !isSpendingLimitBlocked(spendingLimitErrorCode, "") {
+		t.Fatal("exact spending-limit code must match")
+	}
+	if !isSpendingLimitBlocked("Personal-Team-Blocked:Spending-Limit", "ignored") {
+		t.Fatal("exact code match must be case-insensitive")
+	}
+	if isSpendingLimitBlocked("", "personal-team-blocked:spending-limit") {
+		t.Fatal("message-only must not match")
+	}
+	if isSpendingLimitBlocked("payment-required", "You have run out of credits") {
+		t.Fatal("unknown 402 code must not match")
+	}
+	if isSpendingLimitBlocked("prefix-"+spendingLimitErrorCode, "") {
+		t.Fatal("substring code must not match")
+	}
+}
+
+func TestClassifyUnknown402IgnoresPermissionHeuristics(t *testing.T) {
+	got := classifyProbe(classifyInput{
+		Lang:       LangZH,
+		ChatStatus: http.StatusPaymentRequired,
+		ChatCode:   "payment-required",
+		ChatError:  "banned / suspended / permission-denied text must not reclassify bare 402",
+	})
+	if got.Classification == "permission_denied" || got.Classification == "spending_limit" {
+		t.Fatalf("unknown 402 must stay non-actionable, got %+v", got)
+	}
+	if got.Action != "keep" {
+		t.Fatalf("unknown 402 action=%q want keep", got.Action)
+	}
+}
+
+func TestClassifyRealGrok402SpendingLimitPayload(t *testing.T) {
+	body := `{"code":"personal-team-blocked:spending-limit","error":"You have run out of credits or need a Grok subscription. Add credits at https://grok.com/?_s=usage or upgrade at https://grok.com/supergrok."}`
+	parsed := extractError(body)
+	if parsed.Code != spendingLimitErrorCode {
+		t.Fatalf("code = %q", parsed.Code)
+	}
+	got := classifyProbe(classifyInput{
+		Lang:       LangZH,
+		ChatStatus: http.StatusPaymentRequired,
+		ChatCode:   parsed.Code,
+		ChatError:  parsed.Message,
+	})
+	if got.Classification != "spending_limit" || got.Action != "disable" {
+		t.Fatalf("got %+v", got)
+	}
+}

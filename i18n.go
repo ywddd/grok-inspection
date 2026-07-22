@@ -49,6 +49,10 @@ var messages = map[string]map[Lang]string{
 		LangZH: "对话权限被拒绝",
 		LangEN: "Chat permission denied",
 	},
+	"spending_limit": {
+		LangZH: "额度或订阅受限",
+		LangEN: "Spending or subscription limit",
+	},
 	"model_unavailable": {
 		LangZH: "测试模型不可用",
 		LangEN: "Probe model unavailable",
@@ -122,8 +126,8 @@ var messages = map[string]map[Lang]string{
 		LangEN: "Grok Account Inspection",
 	},
 	"menu_desc": {
-		LangZH: "Grok 账号巡检与自动禁用（free-usage / 403 / 401）。",
-		LangEN: "Grok account inspection and auto-ban (free-usage / 403 / 401).",
+		LangZH: "Grok 账号巡检与自动禁用（free-usage / 402 / 403 / 401）。",
+		LangEN: "Grok account inspection and auto-ban (free-usage / 402 / 403 / 401).",
 	},
 	"workers_range": {
 		LangZH: "并发必须是 %d 到 %d 之间的整数",
@@ -139,8 +143,8 @@ var messages = map[string]map[Lang]string{
 	},
 
 	"cfg_autoban_enabled": {
-		LangZH: "是否启用自动禁用（free-usage / permission-denied / 401）。",
-		LangEN: "Enable automatic ban for free-usage / permission-denied / 401.",
+		LangZH: "是否启用自动禁用（free-usage / spending-limit / permission-denied / 401）。",
+		LangEN: "Enable automatic ban for free-usage / spending-limit / permission-denied / 401.",
 	},
 	"cfg_fallback_hours": {
 		LangZH: "没有准确恢复时间时，free-usage-exhausted 的禁用小时数，默认 24。",

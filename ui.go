@@ -35,7 +35,7 @@ func renderUIPage(pluginID string) []byte {
     button.danger { border-color:#fecaca; background:#fef2f2; color:#b91c1c; font-weight:650; }
     button:disabled { opacity:.55; cursor:not-allowed; }
     .summary { display:grid; grid-template-columns:repeat(6,minmax(100px,1fr)); gap:10px; margin-bottom:12px; }
-    .summary.ban-summary { grid-template-columns:repeat(4,minmax(0,1fr)); width:100%%; min-width:0; }
+    .summary.ban-summary { grid-template-columns:repeat(5,minmax(0,1fr)); width:100%%; min-width:0; }
     .card { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px; box-shadow:0 1px 2px rgba(15,23,42,.04); cursor:pointer; min-width:0; }
     .card.active { outline:2px solid #2563eb; }
     .card .k { color:#64748b; font-size:12px; line-height:1.3; overflow-wrap:anywhere; word-break:break-word; }
@@ -43,6 +43,12 @@ func renderUIPage(pluginID string) []byte {
     .bar { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
     .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .actions-row .hint { font-size:12px; color:var(--muted,#64748b); }
+    .schedule-row {
+      display:flex; align-items:center; gap:8px; flex-wrap:wrap; width:100%%;
+      margin:10px 0 12px; padding:10px 0; border-top:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0;
+    }
+    .schedule-row .schedule-status { margin-left:auto; color:var(--muted,#64748b); font-size:12px; line-height:1.5; text-align:right; }
+    .schedule-row select { height:26px; border:1px solid #cbd5e1; border-radius:6px; background:#fff; color:#0f172a; padding:0 6px; }
     .progress { min-height:20px; font-size:12px; color:#64748b; display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:8px; max-width:100%%; }
     .progress.live { color:#1d4ed8; font-weight:700; background:#dbeafe; border:1px solid #93c5fd; box-shadow:0 0 0 1px rgba(37,99,235,.08); }
     .progress.live::before { content:""; width:8px; height:8px; border-radius:50%%; background:#2563eb; box-shadow:0 0 0 0 rgba(37,99,235,.55); animation:pulseDot 1.2s ease-out infinite; flex:0 0 auto; }
@@ -244,6 +250,14 @@ func renderUIPage(pluginID string) []byte {
       color: var(--text) !important;
       border-color: var(--input-border) !important;
     }
+    html[data-grok-theme="dark"] .grok-inspection-page .schedule-row {
+      border-color: var(--border) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .schedule-row select {
+      background: var(--surface-subtle) !important;
+      color: var(--text) !important;
+      border-color: var(--input-border) !important;
+    }
     html[data-grok-theme="dark"] .grok-inspection-page button:not(.primary):not(.soft):not(.danger):not(.tab) {
       background: var(--surface) !important;
       border-color: var(--border) !important;
@@ -310,6 +324,12 @@ func renderUIPage(pluginID string) []byte {
       .grok-inspection-page .actions-row > button { width:100%%; min-width:0; padding:0 8px; }
       .grok-inspection-page .actions-row .hint {
         grid-column:1 / -1; line-height:1.5; overflow-wrap:anywhere;
+      }
+      .grok-inspection-page .schedule-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+      .grok-inspection-page .schedule-row > label,
+      .grok-inspection-page .schedule-row > button { width:100%%; min-width:0; }
+      .grok-inspection-page .schedule-row .schedule-status {
+        grid-column:1 / -1; margin-left:0; text-align:left; overflow-wrap:anywhere;
       }
       .grok-inspection-page .pager { align-items:stretch; }
       .grok-inspection-page .pager > div { width:100%%; }
@@ -506,6 +526,26 @@ func renderUIPage(pluginID string) []byte {
       <button id="filterRunBtn" class="soft" disabled data-i18n-title="category_title" title="只重新探测当前卡片筛选分类下的账号，保留其他结果" data-i18n="inspect_category">巡检当前分类</button>
       <button id="runBtn" class="primary" data-i18n="start">开始巡检</button>
     </div>
+    <div class="schedule-row">
+      <label class="ctl"><input id="scheduleEnabled" type="checkbox"> <span data-i18n="schedule_enabled">自动巡检</span></label>
+      <label class="ctl"><span data-i18n="schedule_interval">间隔（分钟）</span> <input id="scheduleInterval" type="number" min="1" max="10080" step="1" value="60"></label>
+      <label class="ctl"><span data-i18n="schedule_workers">并发</span> <input id="scheduleWorkers" type="number" min="1" max="16" step="1" value="6"></label>
+      <label class="ctl"><input id="scheduleIncludeDisabled" type="checkbox"> <span data-i18n="schedule_include_disabled">包含已禁用</span></label>
+      <label class="ctl"><span data-i18n="schedule_403_action">403 处理</span>
+        <select id="schedule403Action">
+          <option value="disable" data-i18n="schedule_action_disable">禁用</option>
+          <option value="delete" data-i18n="schedule_action_delete">删除</option>
+        </select>
+      </label>
+      <label class="ctl"><span data-i18n="schedule_402_action">402 处理</span>
+        <select id="schedule402Action">
+          <option value="disable" data-i18n="schedule_action_disable">禁用</option>
+          <option value="delete" data-i18n="schedule_action_delete">删除</option>
+        </select>
+      </label>
+      <button id="scheduleSaveBtn" class="soft" type="button" data-i18n="schedule_save">保存自动巡检</button>
+      <span id="scheduleStatus" class="schedule-status" data-i18n="schedule_loading">自动巡检状态加载中…</span>
+    </div>
     <div id="summary" class="summary"></div>
     <div class="bar">
       <div class="actions-row">
@@ -560,8 +600,10 @@ func renderUIPage(pluginID string) []byte {
       <div id="banSummary" class="summary ban-summary">
         <div class="card active" data-ban-filter="all"><div class="k" data-i18n="ban_all">全部</div><div class="v" id="banCount">0</div></div>
         <div class="card" data-ban-filter="quota"><div class="k" data-i18n="ban_quota">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>
+        <div class="card" data-ban-filter="spending_limit"><div class="k" data-i18n="ban_spending_limit">402 额度受限</div><div class="v" id="banSpendingLimitCount">0</div></div>
         <div class="card" data-ban-filter="permission"><div class="k" data-i18n="ban_permission">权限拒绝</div><div class="v" id="banPermissionCount">0</div></div>
         <div class="card" data-ban-filter="unauthorized"><div class="k" data-i18n="ban_authfail">401 认证失败</div><div class="v" id="banUnauthorizedCount">0</div></div>
+        <div class="card" data-ban-filter="manual"><div class="k" data-i18n="ban_manual_disabled">手动禁用</div><div class="v" id="banManualDisabledCount">0</div></div>
       </div>
       <div class="table-wrap account-pool">
         <div class="table-scroll">
@@ -603,7 +645,7 @@ func renderUIPage(pluginID string) []byte {
       ban_enabled_hint:'开关会立即生效并保存',
       ban_refresh:'刷新状态', ban_unban_filter:'解禁当前分类', ban_unban_all:'全部解禁',
       ban_filter_hint:'点击下方卡片筛选分类',
-      ban_all:'全部', ban_quota:'额度用尽', ban_permission:'权限拒绝', ban_authfail:'401 认证失败',
+      ban_all:'全部', ban_quota:'额度用尽', ban_permission:'权限拒绝', ban_authfail:'401 认证失败', ban_manual_disabled:'手动禁用',
       ban_manual:'需手动解禁', ban_auto_restore:'定时自动恢复',
       ban_th_account:'账号', ban_th_reason:'禁用原因', ban_th_time:'禁用时间', ban_th_restore:'恢复方式', ban_th_remain:'剩余', ban_th_until:'恢复时间', ban_th_ops:'操作',
       ban_empty:'当前没有自动禁用中的账号',
@@ -615,6 +657,14 @@ func renderUIPage(pluginID string) []byte {
       language:'语言', key_label:'CPA Management Key（可自动读取管理面板）', workers:'并发',
       include_disabled:'包含已禁用', only_disabled:'仅巡检已禁用', stop:'停止', apply_suggested:'执行建议操作',
       incremental:'增量巡检', inspect_category:'巡检当前分类', start:'开始巡检',
+      schedule_enabled:'自动巡检', schedule_interval:'间隔（分钟）', schedule_workers:'并发', schedule_include_disabled:'包含已禁用',
+      schedule_403_action:'403 处理', schedule_action_disable:'禁用', schedule_action_delete:'删除', schedule_save:'保存自动巡检',
+      schedule_loading:'自动巡检状态加载中…', schedule_disabled:'自动巡检已关闭', schedule_waiting:'等待下次巡检',
+      schedule_running:'自动巡检进行中', schedule_completed:'上次自动巡检已完成', schedule_skipped:'上次自动巡检因任务繁忙跳过',
+      schedule_action_failed:'自动处置失败', schedule_completed_errors:'上次自动巡检完成，但部分处置失败',
+      schedule_next:'下次：', schedule_last:'上次：', schedule_counts:'403：', schedule_disabled_count:'，禁用：', schedule_deleted_count:'，删除：', schedule_failed_count:'，失败：',
+      schedule_key_missing:'后台处置缺少 Management Key', schedule_saved:'自动巡检设置已保存',
+      schedule_delete_confirm_title:'确认自动删除 403 账号', schedule_delete_confirm_body:'后续自动巡检会删除明确返回 permission-denied 的 403 账号，此操作不可恢复。确认保存？',
       incremental_title:'只检测 Auth 中相对上次结果新增的账号', category_title:'只重新探测当前卡片筛选分类下的账号，保留其他结果',
       bulk_export:'批量导出', bulk_disable:'批量禁用', bulk_enable:'批量启用', bulk_delete:'批量删除',
       filter_hint:'点击上方卡片切换分类；禁用/启用数量按当前分类下列表的启用/禁用状态统计',
@@ -670,7 +720,7 @@ func renderUIPage(pluginID string) []byte {
       no_action_seq:'服务端未返回 action_seq，无法确认执行结果',
       deleted_prefix:'删除成功：', disabled_prefix:'禁用成功：', enabled_prefix:'启用成功：', running_prefix:'执行中：',
       key_manual:'已使用手动填写的 Key',
-      hero_autoban:'右侧开关控制实时自动禁用。命中额度用尽 / 权限拒绝 / 401 时自动禁用账号；额度用尽默认 24 小时后恢复，其余需手动解禁。',
+      hero_autoban:'右侧开关控制实时自动禁用。命中额度用尽 / 402 额度受限 / 权限拒绝 / 401 时自动禁用账号；额度用尽默认 24 小时后恢复，其余需手动解禁。',
       filter_count_prefix:'当前分类：', filter_count_mid:'（', filter_count_suffix:' 条）',
       action_failed_suffix:'失败',
       bulk_confirm_title_prefix:'批量', bulk_confirm_title_suffix:'确认',
@@ -683,7 +733,7 @@ func renderUIPage(pluginID string) []byte {
       unban_progress_complete_fail:'保存自动禁用状态失败: ',
       hours_minutes_mid:' 小时 ', hours_minutes_suffix:' 分', minutes_suffix:' 分',
       ban_unknown_reason:'未知原因',
-      ban_reason_quota:'额度用尽', ban_reason_permission:'权限被拒绝', ban_reason_authfail:'认证失败',
+      ban_reason_quota:'额度用尽', ban_reason_permission:'权限被拒绝', ban_reason_authfail:'认证失败', ban_reason_manual_disabled:'手动禁用',
       restore_header_absolute:'按上游重置时间自动恢复',
       restore_header_relative:'按 Retry-After 自动恢复',
       restore_date_plus_fallback:'冷却窗口自动恢复',
@@ -710,18 +760,25 @@ func renderUIPage(pluginID string) []byte {
       notice_title:'提示',
       apply_disable_line:'· 禁用 ', apply_enable_line:'· 启用 ', apply_delete_line:'· 删除 ',
       apply_body_counts_mid:' 个\n',
+      schedule_402_action:'402 处理', schedule_counts_402:'402：',
+      schedule_402_delete_confirm_title:'确认自动删除 402 账号', schedule_402_delete_confirm_body:'后续自动巡检会删除明确返回 personal-team-blocked:spending-limit 的 402 账号，此操作不可恢复。确认保存？',
+      schedule_both_delete_confirm_title:'确认自动删除 402/403 账号', schedule_both_delete_confirm_body:'后续自动巡检会删除明确匹配 402 spending-limit 和 403 permission-denied 的账号，此操作不可恢复。确认保存？',
+      ban_spending_limit:'402 额度受限',
+      class_spending_limit:'额度/订阅受限',
+      spending_limit:'额度/订阅受限',
     },
     en: {
       tab_inspect:'Account inspection', tab_inspect_desc:'Batch probe · suggested actions',
       tab_autoban:'Realtime auto-ban', tab_autoban_desc:'Request intercept · scheduled restore',
       tabs_aria:'Feature tabs', workers_title:'Integer from 1 to 16',
+      th_account:'Account', th_status:'Current status', th_result:'Probe result', th_http:'HTTP', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
       ban_title:'Realtime auto-ban',
       ban_enable:'When on, intercept and ban in realtime',
       ban_on:'On', ban_off:'Off',
       ban_enabled_hint:'Toggle applies immediately and is saved',
       ban_refresh:'Refresh status', ban_unban_filter:'Unban current filter', ban_unban_all:'Unban all',
       ban_filter_hint:'Click a card below to filter',
-      ban_all:'All', ban_quota:'Quota exhausted', ban_permission:'Permission denied', ban_authfail:'401 auth failed',
+      ban_all:'All', ban_quota:'Quota exhausted', ban_spending_limit:'402 spending limit', ban_permission:'Permission denied', ban_authfail:'401 auth failed', ban_manual_disabled:'Manually disabled',
       ban_manual:'Manual unban required', ban_auto_restore:'Auto restore on schedule',
       ban_th_account:'Account', ban_th_reason:'Ban reason', ban_th_time:'Banned at', ban_th_restore:'Restore mode', ban_th_remain:'Remaining', ban_th_until:'Restore at', ban_th_ops:'Actions',
       ban_empty:'No accounts are currently auto-banned',
@@ -733,12 +790,21 @@ func renderUIPage(pluginID string) []byte {
       language:'Language', key_label:'CPA Management Key (can auto-read from the management panel)', workers:'Workers',
       include_disabled:'Include disabled', only_disabled:'Only inspect disabled', stop:'Stop', apply_suggested:'Apply suggested actions',
       incremental:'Incremental inspection', inspect_category:'Inspect current category', start:'Start inspection',
+      schedule_enabled:'Scheduled inspection', schedule_interval:'Interval (min)', schedule_workers:'Workers', schedule_include_disabled:'Include disabled',
+      schedule_403_action:'403 action', schedule_402_action:'402 action', schedule_action_disable:'Disable', schedule_action_delete:'Delete', schedule_save:'Save schedule',
+      schedule_loading:'Loading scheduled inspection…', schedule_disabled:'Scheduled inspection is off', schedule_waiting:'Waiting for next inspection',
+      schedule_running:'Scheduled inspection is running', schedule_completed:'Last scheduled inspection completed', schedule_skipped:'Last scheduled inspection was skipped because another task was busy',
+      schedule_action_failed:'Automatic action failed', schedule_completed_errors:'Scheduled inspection completed with action failures',
+      schedule_next:'Next: ', schedule_last:'Last: ', schedule_counts:'403: ', schedule_counts_402:'402: ', schedule_disabled_count:', disabled: ', schedule_deleted_count:', deleted: ', schedule_failed_count:', failed: ',
+      schedule_key_missing:'Management Key unavailable for background actions', schedule_saved:'Scheduled inspection settings saved',
+      schedule_delete_confirm_title:'Confirm automatic deletion of 403 accounts', schedule_delete_confirm_body:'Future scheduled inspections will delete accounts that explicitly return 403 permission-denied. This cannot be undone. Save this setting?',
+      schedule_402_delete_confirm_title:'Confirm automatic deletion of 402 accounts', schedule_402_delete_confirm_body:'Future scheduled inspections will delete accounts that explicitly return personal-team-blocked:spending-limit 402. This cannot be undone. Save this setting?',
+      schedule_both_delete_confirm_title:'Confirm automatic deletion of 402/403 accounts', schedule_both_delete_confirm_body:'Future scheduled inspections will delete accounts matching the configured 402 spending-limit and 403 permission-denied rules. This cannot be undone. Save this setting?',
       incremental_title:'Only probe accounts newly present in Auth since the last result set', category_title:'Only re-probe accounts in the currently selected category card; keep other results',
       bulk_export:'Bulk export', bulk_disable:'Bulk disable', bulk_enable:'Bulk enable', bulk_delete:'Bulk delete',
       filter_hint:'Click a category card above to filter; disable/enable counts use the enabled/disabled state of the current category list',
       waiting:'Waiting to start', confirm_title:'Confirm action', cancel:'Cancel', ok:'OK',
-      th_account:'Account', th_status:'Current status', th_result:'Probe result', th_http:'HTTP', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
-      class_healthy:'Healthy', class_permission_denied:'Permission denied', class_quota_exhausted:'Quota exhausted',
+      class_healthy:'Healthy', class_permission_denied:'Permission denied', class_quota_exhausted:'Quota exhausted', class_spending_limit:'Spending or subscription limit', spending_limit:'Spending or subscription limit',
       class_reauth:'Reauth required', class_model_unavailable:'Model unavailable', class_probe_error:'Probe error', class_unknown:'Unknown',
       class_all:'All', class_other:'Other',
       action_keep:'Keep', action_disable:'Disable', action_enable:'Enable', action_delete:'Delete',
@@ -788,7 +854,7 @@ func renderUIPage(pluginID string) []byte {
       no_action_seq:'Server did not return action_seq; cannot confirm the action result',
       deleted_prefix:'Deleted: ', disabled_prefix:'Disabled: ', enabled_prefix:'Enabled: ', running_prefix:'Running: ',
       key_manual:'Using a manually entered Key',
-      hero_autoban:'Use the switch to control realtime auto-ban. Quota exhausted / permission denied / 401 are auto-banned; quota bans restore after 24h by default, others need manual unban.',
+      hero_autoban:'Use the switch to control realtime auto-ban. Quota exhausted / 402 spending limit / permission denied / 401 are auto-banned; quota bans restore after 24h by default, others need manual unban.',
       filter_count_prefix:'Current category: ', filter_count_mid:' (', filter_count_suffix:' rows)',
       action_failed_suffix:' failed',
       bulk_confirm_title_prefix:'Bulk ', bulk_confirm_title_suffix:' confirm',
@@ -801,7 +867,7 @@ func renderUIPage(pluginID string) []byte {
       unban_progress_complete_fail:'Failed to save auto-ban state: ',
       hours_minutes_mid:'h ', hours_minutes_suffix:'m', minutes_suffix:'m',
       ban_unknown_reason:'Unknown reason',
-      ban_reason_quota:'Quota exhausted', ban_reason_permission:'Permission denied', ban_reason_authfail:'Auth failed',
+      ban_reason_quota:'Quota exhausted', ban_reason_permission:'Permission denied', ban_reason_authfail:'Auth failed', ban_reason_manual_disabled:'Manually disabled',
       restore_header_absolute:'Auto restore at upstream reset time',
       restore_header_relative:'Auto restore after Retry-After',
       restore_date_plus_fallback:'Auto restore after cooldown window',
@@ -874,6 +940,7 @@ func renderUIPage(pluginID string) []byte {
       classLabel.healthy = t('class_healthy');
       classLabel.permission_denied = t('class_permission_denied');
       classLabel.quota_exhausted = t('class_quota_exhausted');
+      classLabel.spending_limit = t('class_spending_limit');
       classLabel.reauth = t('class_reauth');
       classLabel.model_unavailable = t('class_model_unavailable');
       classLabel.probe_error = t('class_probe_error');
@@ -894,6 +961,7 @@ func renderUIPage(pluginID string) []byte {
       quota_exhausted:'额度已用尽',
       temp_rate_limited:'临时限流 (HTTP 429)，建议稍后重试',
       permission_denied:'对话权限被拒绝',
+      spending_limit:'额度或订阅受限',
       model_unavailable:'测试模型不可用',
       chat_ok:'对话测试成功',
       probe_failed:'探测失败',
@@ -915,6 +983,7 @@ func renderUIPage(pluginID string) []byte {
       quota_exhausted:'Quota exhausted',
       temp_rate_limited:'Temporarily rate-limited (HTTP 429); retry later',
       permission_denied:'Chat permission denied',
+      spending_limit:'Spending or subscription limit',
       model_unavailable:'Probe model unavailable',
       chat_ok:'Chat probe succeeded',
       probe_failed:'Probe failed',
@@ -1208,6 +1277,8 @@ func renderUIPage(pluginID string) []byte {
   const WORKERS_MIN = 1;
   const WORKERS_MAX = 16;
   const WORKERS_DEFAULT = 6;
+  const SCHEDULE_INTERVAL_MIN = 1;
+  const SCHEDULE_INTERVAL_MAX = 10080;
   const state = {
     filter: 'all',
     page: 1,
@@ -1376,7 +1447,7 @@ func renderUIPage(pluginID string) []byte {
     const again = loadStoredManagementKey();
     if (applyBootKey(again)) {
       updateAuthState();
-      if (hasManagementKey()) refresh();
+      if (hasManagementKey()) { refresh(); loadSchedule(); }
     }
   }, ms));
   function syncKeyHint() {
@@ -1750,17 +1821,18 @@ func renderUIPage(pluginID string) []byte {
     persistManagementKey(keyInput.value);
     updateAuthState();
     refresh();
+    loadSchedule();
   });
   // If a key is available, keep plugin storage in sync for next open.
   if (keyInput.value.trim()) persistManagementKey(keyInput.value);
   updateAuthState();
   const classLabel = {
-    healthy: t('class_healthy'), permission_denied: t('class_permission_denied'), quota_exhausted: t('class_quota_exhausted'),
+    healthy: t('class_healthy'), permission_denied: t('class_permission_denied'), quota_exhausted: t('class_quota_exhausted'), spending_limit: t('class_spending_limit'),
     reauth: t('class_reauth'), model_unavailable: t('class_model_unavailable'), probe_error: t('class_probe_error'), unknown: t('class_unknown')
   };
   const actionLabel = { keep: t('action_keep'), disable: t('action_disable'), enable: t('action_enable'), delete: t('action_delete') };
   const color = {
-    healthy: '#047857', permission_denied: '#b45309', quota_exhausted: '#b45309',
+    healthy: '#047857', permission_denied: '#b45309', quota_exhausted: '#b45309', spending_limit: '#c2410c',
     reauth: '#b91c1c', model_unavailable: '#475569', probe_error: '#b91c1c', unknown: '#475569'
   };
   function pill(text, c) {
@@ -1781,6 +1853,123 @@ func renderUIPage(pluginID string) []byte {
     if (!res.ok) throw new Error((data && (data.error || data.message)) || text || ('HTTP ' + res.status));
     return data;
   }
+  let scheduleDirty = false;
+  function scheduleStatusText(data) {
+    if (!data || typeof data !== 'object') return t('schedule_loading');
+    if (data.enabled === false) return t('schedule_disabled');
+    const status = String(data.last_status || 'waiting');
+    let text = status === 'running' ? t('schedule_running')
+      : status === 'action_failed' ? t('schedule_action_failed')
+      : status === 'completed_with_errors' ? t('schedule_completed_errors')
+      : status === 'skipped' ? t('schedule_skipped')
+      : t('schedule_waiting');
+    if (data.last_run_at) text += ' · ' + t('schedule_last') + formatShanghaiTime(data.last_run_at);
+    if (data.next_run_at) text += ' · ' + t('schedule_next') + formatShanghaiTime(data.next_run_at);
+    if (Number(data.last_matched || 0) > 0) {
+      const matched403 = Number(data.last_matched_403 || 0);
+      const matched402 = Number(data.last_matched_402 || 0);
+      if (matched403 > 0) {
+        text += ' · ' + t('schedule_counts') + matched403;
+        text += t('schedule_disabled_count') + (data.last_disabled_403 || 0);
+        text += t('schedule_deleted_count') + (data.last_deleted_403 || 0);
+        text += t('schedule_failed_count') + (data.last_failed_403 || 0);
+      }
+      if (matched402 > 0) {
+        text += ' · ' + t('schedule_counts_402') + matched402;
+        text += t('schedule_disabled_count') + (data.last_disabled_402 || 0);
+        text += t('schedule_deleted_count') + (data.last_deleted_402 || 0);
+        text += t('schedule_failed_count') + (data.last_failed_402 || 0);
+      }
+      if (matched403 === 0 && matched402 === 0) {
+        text += ' · ' + t('schedule_counts') + data.last_matched;
+        text += t('schedule_disabled_count') + (data.last_disabled || 0);
+        text += t('schedule_deleted_count') + (data.last_deleted || 0);
+        text += t('schedule_failed_count') + (data.last_failed || 0);
+      }
+    }
+    if (data.action_ready === false) text += ' · ' + t('schedule_key_missing');
+    if (data.last_error) text += ' · ' + data.last_error;
+    return text;
+  }
+  function renderSchedule(data, hydrate) {
+    if (!data || typeof data !== 'object') return;
+    if (hydrate && !scheduleDirty) {
+      $('scheduleEnabled').checked = !!data.enabled;
+      $('scheduleInterval').value = String(data.interval_minutes || 60);
+      $('scheduleWorkers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
+      $('scheduleIncludeDisabled').checked = !!data.include_disabled;
+      $('schedule403Action').value = data.permission_denied_action === 'delete' ? 'delete' : 'disable';
+      $('schedule402Action').value = data.spending_limit_action === 'delete' ? 'delete' : 'disable';
+    }
+    const status = $('scheduleStatus');
+    if (status) status.textContent = scheduleStatusText(data);
+    const save = $('scheduleSaveBtn');
+    if (save) save.disabled = !hasManagementKey();
+  }
+  async function loadSchedule() {
+    if (!hasManagementKey()) {
+      renderSchedule({ enabled: false, action_ready: false }, true);
+      return;
+    }
+    try {
+      const raw = await api('/schedule');
+      const data = (raw && raw.result && typeof raw.result === 'object') ? raw.result : raw;
+      renderSchedule(data, true);
+    } catch (e) {
+      const status = $('scheduleStatus');
+      if (status) status.textContent = String(e.message || e);
+    }
+  }
+  async function saveSchedule() {
+    if (!hasManagementKey()) {
+      showErr(t('need_key'));
+      return;
+    }
+    const enabled = $('scheduleEnabled').checked;
+    const interval = Number($('scheduleInterval').value);
+    const workers = Number($('scheduleWorkers').value);
+    if (!Number.isInteger(interval) || interval < SCHEDULE_INTERVAL_MIN || interval > SCHEDULE_INTERVAL_MAX) {
+      showErr(t('schedule_interval') + ': ' + SCHEDULE_INTERVAL_MIN + '-' + SCHEDULE_INTERVAL_MAX);
+      return;
+    }
+    if (!Number.isInteger(workers) || workers < WORKERS_MIN || workers > WORKERS_MAX) {
+      showErr(t('workers_range_prefix') + WORKERS_MIN + '-' + WORKERS_MAX + t('workers_range_suffix'));
+      return;
+    }
+    const action = $('schedule403Action').value === 'delete' ? 'delete' : 'disable';
+    const action402 = $('schedule402Action').value === 'delete' ? 'delete' : 'disable';
+    if (action === 'delete' || action402 === 'delete') {
+      const only402Delete = action !== 'delete' && action402 === 'delete';
+      const bothDelete = action === 'delete' && action402 === 'delete';
+      const ok = await confirmDialog(
+        bothDelete ? t('schedule_both_delete_confirm_title') : (only402Delete ? t('schedule_402_delete_confirm_title') : t('schedule_delete_confirm_title')),
+        bothDelete ? t('schedule_both_delete_confirm_body') : (only402Delete ? t('schedule_402_delete_confirm_body') : t('schedule_delete_confirm_body'))
+      );
+      if (!ok) return;
+    }
+    const btn = $('scheduleSaveBtn');
+    if (btn) btn.disabled = true;
+    try {
+      const raw = await api('/schedule', {
+        method: 'POST',
+        body: JSON.stringify({
+          enabled,
+          interval_minutes: interval,
+          workers,
+          include_disabled: $('scheduleIncludeDisabled').checked,
+          permission_denied_action: action,
+          spending_limit_action: action402
+        })
+      });
+      const data = (raw && raw.result && typeof raw.result === 'object') ? raw.result : raw;
+      scheduleDirty = false;
+      renderSchedule(data, true);
+      showOk(t('schedule_saved'));
+    } catch (e) {
+      showErr(String(e.message || e));
+      if (btn) btn.disabled = false;
+    }
+  }
   function filtered() {
     const rows = state.snapshot.results || [];
     if (state.filter === 'all') return rows;
@@ -1788,7 +1977,7 @@ func renderUIPage(pluginID string) []byte {
     if (state.filter === 'other') {
       return rows.filter((r) => {
         const c = r.classification || '';
-        return c !== 'healthy' && c !== 'permission_denied' && c !== 'quota_exhausted' && c !== 'reauth';
+        return c !== 'healthy' && c !== 'permission_denied' && c !== 'quota_exhausted' && c !== 'spending_limit' && c !== 'reauth';
       });
     }
     return rows.filter((r) => r.classification === state.filter);
@@ -1799,6 +1988,7 @@ func renderUIPage(pluginID string) []byte {
       healthy: t('class_healthy'),
       permission_denied: t('class_permission_denied'),
       quota_exhausted: t('class_quota_exhausted'),
+      spending_limit: t('class_spending_limit'),
       reauth: t('class_reauth'),
       other: t('class_other')
     };
@@ -1883,6 +2073,7 @@ func renderUIPage(pluginID string) []byte {
       ['healthy', t('class_healthy'), summary.healthy || 0],
       ['permission_denied', t('class_permission_denied'), summary.permission_denied || 0],
       ['quota_exhausted', t('class_quota_exhausted'), summary.quota_exhausted || 0],
+      ['spending_limit', t('class_spending_limit'), summary.spending_limit || 0],
       ['reauth', t('class_reauth'), summary.reauth || 0],
       ['other', t('class_other'), summary.other || 0],
     ];
@@ -2115,6 +2306,7 @@ func renderUIPage(pluginID string) []byte {
         if (data && data.results_gen != null) lastResultsGen = Number(data.results_gen) || 0;
         lastFullResultsAt = Date.now();
       }
+      if (data && data.schedule) renderSchedule(data.schedule, false);
 
       if (data && data.running) {
         $('includeDisabled').checked = !!data.include_disabled;
@@ -2189,6 +2381,13 @@ func renderUIPage(pluginID string) []byte {
       savePrefs({ includeDisabled: include.checked, onlyDisabled: only.checked });
     };
   }
+  ['scheduleEnabled', 'scheduleInterval', 'scheduleWorkers', 'scheduleIncludeDisabled', 'schedule403Action', 'schedule402Action'].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener('input', () => { scheduleDirty = true; });
+    if (el) el.addEventListener('change', () => { scheduleDirty = true; });
+  });
+  const scheduleSaveBtn = $('scheduleSaveBtn');
+  if (scheduleSaveBtn) scheduleSaveBtn.onclick = () => saveSchedule();
   $('runBtn').onclick = () => startInspection(false);
   $('incrBtn').onclick = () => startInspection(true);
   if ($('filterRunBtn')) $('filterRunBtn').onclick = () => startInspection('filter');
@@ -2267,8 +2466,10 @@ func renderUIPage(pluginID string) []byte {
     const c = String(code || '').trim().toLowerCase();
     if (!c) return t('ban_unknown_reason');
     if (c === 'subscription:free-usage-exhausted' || c.indexOf('free-usage-exhausted') >= 0) return t('ban_reason_quota');
+    if (c === 'personal-team-blocked:spending-limit' || c.indexOf('spending-limit') >= 0) return t('ban_spending_limit');
     if (c === 'permission-denied' || c.indexOf('permission-denied') >= 0) return t('ban_reason_permission');
     if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0) return t('ban_reason_authfail');
+    if (c === 'manual-disabled' || c.indexOf('manual-disabled') >= 0) return t('ban_reason_manual_disabled');
     return code;
   }
   function formatResetSource(source, remainingSec) {
@@ -2309,14 +2510,18 @@ func renderUIPage(pluginID string) []byte {
     const c = String(b.error_code || '').trim().toLowerCase();
     if (!c) return 'other';
     if (c === 'subscription:free-usage-exhausted' || c.indexOf('free-usage-exhausted') >= 0) return 'quota';
+    if (c === 'personal-team-blocked:spending-limit' || c.indexOf('spending-limit') >= 0) return 'spending_limit';
     if (c === 'permission-denied' || c.indexOf('permission-denied') >= 0) return 'permission';
     if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0) return 'unauthorized';
+    if (c === 'manual-disabled' || c.indexOf('manual-disabled') >= 0) return 'manual';
     return 'other';
   }
   function banFilterLabel(f) {
     if (f === 'quota') return t('ban_quota');
+    if (f === 'spending_limit') return t('ban_spending_limit');
     if (f === 'permission') return t('ban_permission');
     if (f === 'unauthorized') return t('ban_authfail');
+    if (f === 'manual') return t('ban_manual_disabled');
     return t('ban_all');
   }
   function filteredBans() {
@@ -2442,17 +2647,21 @@ async function loadBans() {
       banState.page = 1;
       const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = String(v); };
             // counts by category (prefer server, fallback client-side)
-      let q = 0, p = 0, u = 0;
+      let q = 0, s = 0, p = 0, u = 0, m = 0;
       banState.bans.forEach((b) => {
         const c = banCategoryOf(b);
         if (c === 'quota') q++;
+        else if (c === 'spending_limit') s++;
         else if (c === 'permission') p++;
         else if (c === 'unauthorized') u++;
+        else if (c === 'manual') m++;
       });
       set('banCount', data.count != null ? data.count : banState.bans.length);
       set('banQuotaCount', data.quota_count != null ? data.quota_count : q);
+      set('banSpendingLimitCount', data.spending_limit_count != null ? data.spending_limit_count : s);
       set('banPermissionCount', data.permission_count != null ? data.permission_count : p);
       set('banUnauthorizedCount', data.unauthorized_count != null ? data.unauthorized_count : u);
+      set('banManualDisabledCount', data.manual_disabled_count != null ? data.manual_disabled_count : m);
       const on = data.enabled !== false;
       const toggle = document.getElementById('banEnabledToggle');
       if (toggle) {
@@ -2595,6 +2804,7 @@ async function setAutobanEnabled(on) {
   updateAuthState();
   if (hasManagementKey()) {
     loadBans();
+    loadSchedule();
   }
 
   (function bindLang() {

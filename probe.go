@@ -196,7 +196,7 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string, lang La
 // account budget (55s) while abandoned host.http.do still holds a gate slot.
 func shouldTryFallback(status int, classification string) bool {
 	switch classification {
-	case "reauth", "quota_exhausted", "permission_denied", "healthy":
+	case "reauth", "quota_exhausted", "permission_denied", "spending_limit", "healthy":
 		return false
 	}
 	switch status {
@@ -226,7 +226,7 @@ func newProbeOutcome(resp apiCallResponse, disabled bool, lang Lang) probeOutcom
 
 func resolveProbeOutcome(primary, fallback probeOutcome, lang Lang) probeOutcome {
 	switch primary.Classified.Classification {
-	case "reauth", "quota_exhausted", "permission_denied":
+	case "reauth", "quota_exhausted", "permission_denied", "spending_limit":
 		if fallback.Classified.Classification == "healthy" {
 			primary.Classified.Reason += T(lang, "fallback_disagreed")
 		}

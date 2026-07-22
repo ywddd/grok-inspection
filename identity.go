@@ -97,7 +97,7 @@ func classificationMatches(class string, want map[string]struct{}) bool {
 		return false
 	}
 	switch class {
-	case "healthy", "permission_denied", "quota_exhausted", "reauth":
+	case "healthy", "permission_denied", "quota_exhausted", "spending_limit", "reauth":
 		return false
 	default:
 		return true

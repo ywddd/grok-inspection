@@ -42,6 +42,7 @@ type accountResult struct {
 	Model          string `json:"model,omitempty"`
 	ErrorCode      string `json:"error_code,omitempty"`
 	ErrorMessage   string `json:"error_message,omitempty"`
+	BanErrorCode   string `json:"-"`
 }
 
 // rowActionReport is a lightweight completion record for single-row /action.
@@ -87,8 +88,9 @@ type jobSnapshot struct {
 	ResultsGen     uint64 `json:"results_gen"`
 	IncludeResults bool   `json:"include_results"`
 	// PersistError is the last results.json save failure, if any.
-	PersistError string         `json:"persist_error,omitempty"`
-	Unban        map[string]any `json:"unban,omitempty"`
+	PersistError string                      `json:"persist_error,omitempty"`
+	Unban        map[string]any              `json:"unban,omitempty"`
+	Schedule     persistedInspectionSchedule `json:"schedule"`
 }
 
 // httpStatusError pairs a stable HTTP status with a localized operator message.
@@ -155,6 +157,9 @@ type applyRequest struct {
 	// ForceAction overrides recommended action for selected accounts.
 	// Used by filter-based bulk disable/delete. Values: disable | enable | delete
 	ForceAction string `json:"force_action"`
+	// BanErrorCode is internal-only. Scheduled 403 handling preserves the
+	// permission-denied reason instead of labeling the action as manual.
+	BanErrorCode string `json:"-"`
 }
 
 type actionRequest struct {
@@ -214,11 +219,15 @@ type inspectionEngine struct {
 	runClassifyScoped bool
 	// fullClearPending: full inspect waits for list success before wiping results.
 	fullClearPending bool
+	schedule         persistedInspectionSchedule
 }
 
 const maxRecentRowActions = 32
 
-var engine = &inspectionEngine{workers: defaultWorkers}
+var engine = &inspectionEngine{
+	workers:  defaultWorkers,
+	schedule: defaultInspectionSchedule(),
+}
 
 var (
 	callHostAuthListFn = callHostAuthList
@@ -271,6 +280,7 @@ func (e *inspectionEngine) loadFromDisk() {
 		return
 	}
 	e.results = append([]accountResult(nil), snap.Results...)
+	e.schedule = normalizePersistedInspectionSchedule(snap.Schedule)
 	e.bumpResultsLocked()
 	if snap.Workers >= minWorkers && snap.Workers <= maxWorkers {
 		e.workers = snap.Workers
@@ -300,6 +310,7 @@ func (e *inspectionEngine) copyPersistedLocked() persistedSnapshot {
 		IncludeDisabled: e.includeDisabled,
 		OnlyDisabled:    e.onlyDisabled,
 		Results:         append([]accountResult(nil), e.results...),
+		Schedule:        e.schedule,
 		seq:             e.persistSeq,
 	}
 	if !e.startedAt.IsZero() {
@@ -380,6 +391,7 @@ func summarizeResults(results []accountResult) map[string]int {
 		"healthy":           0,
 		"permission_denied": 0,
 		"quota_exhausted":   0,
+		"spending_limit":    0,
 		"reauth":            0,
 		"other":             0,
 	}
@@ -391,6 +403,8 @@ func summarizeResults(results []accountResult) map[string]int {
 			summary["permission_denied"]++
 		case "quota_exhausted":
 			summary["quota_exhausted"]++
+		case "spending_limit":
+			summary["spending_limit"]++
 		case "reauth":
 			summary["reauth"]++
 		default:
@@ -462,6 +476,7 @@ func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
 		IncludeResults:   includeResults,
 		PersistError:     e.persistError,
 		Unban:            unbanJobStatus(),
+		Schedule:         e.schedule,
 	}
 	if includeResults {
 		snap.Results = append([]accountResult(nil), e.results...)

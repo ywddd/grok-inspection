@@ -33,6 +33,23 @@ var (
 	errListAccountsTimeout = errors.New("list_accounts_timeout")
 )
 
+// probeHTTPTimeoutError is a soft per-call timeout (probeHTTPTimeout, typically 25s).
+// Unwraps to errHTTPProbeTimeout so retry detection stays language-agnostic.
+type probeHTTPTimeoutError struct {
+	d      time.Duration
+	method string
+	url    string
+}
+
+func (e *probeHTTPTimeoutError) Error() string {
+	if e == nil {
+		return errHTTPProbeTimeout.Error()
+	}
+	return fmt.Sprintf("%s: %s %s %s", errHTTPProbeTimeout.Error(), e.d, e.method, e.url)
+}
+
+func (e *probeHTTPTimeoutError) Unwrap() error { return errHTTPProbeTimeout }
+
 type apiCallResponse struct {
 	StatusCode int                 `json:"status_code"`
 	Header     map[string][]string `json:"header"`
@@ -118,8 +135,15 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string, lang La
 		if isProbeTimeoutErr(errChat) {
 			base.Classification = "probe_error"
 			base.Action = "keep"
-			base.Reason = T(lang, "probe_timeout", accountProbeTimeout)
-			base.ErrorMessage = "account probe timeout"
+			var ht *probeHTTPTimeoutError
+			if errors.As(errChat, &ht) && ht != nil {
+				// Per-call soft timeout (typically 25s), not the whole-account 55s budget.
+				base.Reason = T(lang, "http_probe_timeout", ht.d, ht.method, ht.url)
+				base.ErrorMessage = "http probe timeout"
+			} else {
+				base.Reason = T(lang, "probe_timeout", accountProbeTimeout)
+				base.ErrorMessage = "account probe timeout"
+			}
 			return base
 		}
 		classified := classifyProbe(classifyInput{
@@ -260,7 +284,7 @@ func callHostAPICallOnce(authIndex, method, rawURL string, body []byte, jsonBody
 	case out := <-ch:
 		return out.resp, out.err
 	case <-time.After(probeHTTPTimeout):
-		return apiCallResponse{}, fmt.Errorf("%w: %s %s %s", errHTTPProbeTimeout, probeHTTPTimeout, method, rawURL)
+		return apiCallResponse{}, &probeHTTPTimeoutError{d: probeHTTPTimeout, method: method, url: rawURL}
 	}
 }
 

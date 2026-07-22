@@ -619,7 +619,7 @@ func renderUIPage(pluginID string) []byte {
       bulk_export:'批量导出', bulk_disable:'批量禁用', bulk_enable:'批量启用', bulk_delete:'批量删除',
       filter_hint:'点击上方卡片切换分类；禁用/启用数量按当前分类下列表的启用/禁用状态统计',
       waiting:'等待开始', confirm_title:'确认操作', cancel:'取消', ok:'确定',
-      th_account:'账号', th_status:'当前状态', th_result:'检测结果', th_model:'模型', th_action:'建议', th_reason:'原因', th_ops:'操作',
+      th_account:'账号', th_status:'当前状态', th_result:'检测结果', th_http:'HTTP', th_model:'模型', th_action:'建议', th_reason:'原因', th_ops:'操作',
       class_healthy:'健康', class_permission_denied:'权限被拒', class_quota_exhausted:'额度用尽',
       class_reauth:'需重新登录', class_model_unavailable:'模型不可用', class_probe_error:'探测异常', class_unknown:'未知',
       class_all:'全部', class_other:'异常',
@@ -737,7 +737,7 @@ func renderUIPage(pluginID string) []byte {
       bulk_export:'Bulk export', bulk_disable:'Bulk disable', bulk_enable:'Bulk enable', bulk_delete:'Bulk delete',
       filter_hint:'Click a category card above to filter; disable/enable counts use the enabled/disabled state of the current category list',
       waiting:'Waiting to start', confirm_title:'Confirm action', cancel:'Cancel', ok:'OK',
-      th_account:'Account', th_status:'Current status', th_result:'Probe result', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
+      th_account:'Account', th_status:'Current status', th_result:'Probe result', th_http:'HTTP', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
       class_healthy:'Healthy', class_permission_denied:'Permission denied', class_quota_exhausted:'Quota exhausted',
       class_reauth:'Reauth required', class_model_unavailable:'Model unavailable', class_probe_error:'Probe error', class_unknown:'Unknown',
       class_all:'All', class_other:'Other',
@@ -899,7 +899,11 @@ func renderUIPage(pluginID string) []byte {
       missing_auth_index:'缺少 auth_index',
       fallback_disagreed:'；备用接口结果不一致，按主探测结果判定',
       list_accounts_timeout:'列出账号超时（30s）',
-      probe_timeout_prefix:'探测超时（>'
+      list_accounts_failed_prefix:'列出账号失败: ',
+      probe_timeout_prefix:'探测超时（>',
+      probe_timeout_suffix:'）',
+      http_probe_timeout_head:'HTTP 探测超时（',
+      http_probe_timeout_mid:'）: '
     },
     en: {
       auth_expired:'Authentication expired or invalid',
@@ -916,18 +920,69 @@ func renderUIPage(pluginID string) []byte {
       missing_auth_index:'Missing auth_index',
       fallback_disagreed:'; fallback endpoint disagreed; using primary probe result',
       list_accounts_timeout:'Listing accounts timed out (30s)',
-      probe_timeout_prefix:'Probe timed out (>'
+      list_accounts_failed_prefix:'Failed to list accounts: ',
+      probe_timeout_prefix:'Probe timed out (>',
+      probe_timeout_suffix:')',
+      http_probe_timeout_head:'HTTP probe timed out (',
+      http_probe_timeout_mid:'): '
     }
   };
   function reasonText(key) {
     const pack = REASON_I18N[lang] || REASON_I18N.zh;
     return (pack && pack[key]) || (REASON_I18N.zh && REASON_I18N.zh[key]) || key;
   }
+  function formatHTTPProbeTimeout(dur, method, url) {
+    return reasonText('http_probe_timeout_head') + dur + reasonText('http_probe_timeout_mid') + method + ' ' + url;
+  }
+  function formatProbeTimeout(dur) {
+    return reasonText('probe_timeout_prefix') + dur + reasonText('probe_timeout_suffix');
+  }
+  function formatListAccountsFailed(detail) {
+    return reasonText('list_accounts_failed_prefix') + detail;
+  }
   function localizeKnownReason(reason) {
     reason = String(reason == null ? '' : reason).trim();
     if (!reason) return reason;
-    const keys = Object.keys(REASON_I18N.zh).filter((k) => k !== 'probe_timeout_prefix' && k !== 'fallback_disagreed');
     const catalogs = [REASON_I18N.zh, REASON_I18N.en];
+    const skip = {
+      fallback_disagreed:1, list_accounts_timeout:1, list_accounts_failed_prefix:1,
+      probe_timeout_prefix:1, probe_timeout_suffix:1,
+      http_probe_timeout_head:1, http_probe_timeout_mid:1
+    };
+    // Formatted: HTTP probe timeout
+    for (const cat of catalogs) {
+      const head = cat.http_probe_timeout_head;
+      const mid = cat.http_probe_timeout_mid;
+      if (head && mid && reason.indexOf(head) === 0) {
+        const rest = reason.slice(head.length);
+        const midIdx = rest.indexOf(mid);
+        if (midIdx > 0) {
+          const dur = rest.slice(0, midIdx);
+          const tail = rest.slice(midIdx + mid.length).trim();
+          const sp = tail.indexOf(' ');
+          if (sp > 0) {
+            return formatHTTPProbeTimeout(dur, tail.slice(0, sp), tail.slice(sp + 1));
+          }
+        }
+      }
+    }
+    // Formatted: account probe timeout
+    for (const cat of catalogs) {
+      const head = cat.probe_timeout_prefix;
+      const suf = cat.probe_timeout_suffix;
+      if (head && suf && reason.indexOf(head) === 0 && reason.slice(-suf.length) === suf) {
+        const dur = reason.slice(head.length, reason.length - suf.length);
+        return formatProbeTimeout(dur);
+      }
+    }
+    // Formatted: list accounts failed
+    for (const cat of catalogs) {
+      const prefix = cat.list_accounts_failed_prefix;
+      if (prefix && reason.indexOf(prefix) === 0) {
+        return formatListAccountsFailed(reason.slice(prefix.length));
+      }
+    }
+    const keys = Object.keys(REASON_I18N.zh).filter((k) => !skip[k]);
     for (const key of keys) {
       for (const cat of catalogs) {
         const candidate = cat[key];
@@ -948,18 +1003,11 @@ func renderUIPage(pluginID string) []byte {
         }
       }
     }
-    // probe_timeout with duration: 探测超时（>55s） / Probe timed out (>55s)
-    for (const cat of catalogs) {
-      const p = cat.probe_timeout_prefix;
-      if (p && reason.indexOf(p) === 0) {
-        const rest = reason.slice(p.length); // e.g. 55s） or 55s)
-        return reasonText('probe_timeout_prefix') + rest.replace(/）/g, lang === 'en' ? ')' : '）').replace(/\)$/ , lang === 'zh' ? '）' : ')');
-      }
-    }
-    // list_accounts_failed prefix forms are free-form; leave unchanged if unknown.
+    // exact list_accounts_timeout / other whole strings
     for (const cat of catalogs) {
       for (const key of Object.keys(cat)) {
-        if (reason === cat[key]) return reasonText(key);
+        if (reason === cat[key] && !skip[key]) return reasonText(key);
+        if (key === 'list_accounts_timeout' && reason === cat[key]) return reasonText(key);
       }
     }
     return reason;
@@ -1691,7 +1739,7 @@ func renderUIPage(pluginID string) []byte {
       if (msg.length > 500) msg = msg.slice(0, 500) + '…';
       o.error_message = msg;
     }
-    if (o.reason) o.reason = decodeExportText(o.reason);
+    if (o.reason) o.reason = localizeKnownReason(decodeExportText(o.reason));
     return o;
   }
   function exportRows(format) {

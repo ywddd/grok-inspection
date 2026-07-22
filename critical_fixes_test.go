@@ -16,6 +16,19 @@ import (
 	"grok-inspection/cpasdk/pluginapi"
 )
 
+func isBusyErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "busy") ||
+		strings.Contains(msg, "already running") ||
+		strings.Contains(msg, "unban") ||
+		strings.Contains(msg, "忙") ||
+		strings.Contains(msg, "解禁") ||
+		strings.Contains(msg, "巡检进行中") ||
+		strings.Contains(msg, "批量操作")
+}
 func resetUnbanJobForTest() {
 	unbanJob.mu.Lock()
 	unbanJob.running = false
@@ -258,7 +271,7 @@ func TestSingleUnbanClaimBlocksInspectionAndBulkJobs(t *testing.T) {
 	}
 
 	// Host call still in-flight: claim must block inspection / bulk unban / bulk apply.
-	if err := engine.start(startRequest{Workers: 1}); err == nil || !(strings.Contains(err.Error(), "busy") || strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "unban")) {
+	if err := engine.start(startRequest{Workers: 1}); err == nil || !(isBusyErr(err)) {
 		close(release)
 		done.Wait()
 		t.Fatalf("start during single unban: %v", err)
@@ -268,7 +281,7 @@ func TestSingleUnbanClaimBlocksInspectionAndBulkJobs(t *testing.T) {
 		done.Wait()
 		t.Fatalf("startUnbanJob during single unban: %v", err)
 	}
-	if err := engine.startApply(applyRequest{ForceAction: "disable", AuthIndexes: []string{"x1"}}, "test-pass", nil); err == nil || !strings.Contains(err.Error(), "busy") {
+	if err := engine.startApply(applyRequest{ForceAction: "disable", AuthIndexes: []string{"x1"}}, "test-pass", nil); err == nil || !isBusyErr(err) {
 		close(release)
 		done.Wait()
 		t.Fatalf("startApply during single unban: %v", err)

@@ -312,3 +312,131 @@ func excerptAround(s, needle string, pad int) string {
 	}
 	return s[start:end]
 }
+
+func TestUIPageI18NDefinesHTTPColumn(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, `data-i18n="th_http"`) {
+		t.Fatal("th_http data-i18n missing in HTML")
+	}
+	// Both language packs must define th_http so applyStaticI18n does not show the raw key.
+	for _, marker := range []string{
+		`th_http:'HTTP'`,
+		`th_account:'账号'`,
+		`th_account:'Account'`,
+	} {
+		if !strings.Contains(page, marker) {
+			// allow either quoted form in zh/en packs
+		}
+	}
+	if !strings.Contains(page, "th_http:") {
+		t.Fatal("I18N missing th_http key")
+	}
+	// Ensure zh and en packs both contain th_http entries.
+	zhIdx := strings.Index(page, "zh: {")
+	enIdx := strings.Index(page, "en: {")
+	if zhIdx < 0 || enIdx < 0 || enIdx < zhIdx {
+		t.Fatal("I18N zh/en packs missing")
+	}
+	zhPack := page[zhIdx:enIdx]
+	enPack := page[enIdx : enIdx+4000]
+	if !strings.Contains(zhPack, "th_http:") {
+		t.Fatal("zh I18N missing th_http")
+	}
+	if !strings.Contains(enPack, "th_http:") {
+		t.Fatal("en I18N missing th_http")
+	}
+}
+
+func TestLocalizeKnownReasonHTTPProbeTimeoutAndListFailed(t *testing.T) {
+	zhHTTP := T(LangZH, "http_probe_timeout", "25s", "POST", "https://example.test/v1")
+	enHTTP := T(LangEN, "http_probe_timeout", "25s", "POST", "https://example.test/v1")
+	if got := localizeKnownReason(LangEN, zhHTTP); got != enHTTP {
+		t.Fatalf("zh http timeout -> en = %q, want %q", got, enHTTP)
+	}
+	if got := localizeKnownReason(LangZH, enHTTP); got != zhHTTP {
+		t.Fatalf("en http timeout -> zh = %q, want %q", got, zhHTTP)
+	}
+
+	zhList := T(LangZH, "list_accounts_failed", "connection refused")
+	enList := T(LangEN, "list_accounts_failed", "connection refused")
+	if got := localizeKnownReason(LangEN, zhList); got != enList {
+		t.Fatalf("zh list failed -> en = %q, want %q", got, enList)
+	}
+	if got := localizeKnownReason(LangZH, enList); got != zhList {
+		t.Fatalf("en list failed -> zh = %q, want %q", got, zhList)
+	}
+
+	zhProbe := T(LangZH, "probe_timeout", "55s")
+	enProbe := T(LangEN, "probe_timeout", "55s")
+	if got := localizeKnownReason(LangEN, zhProbe); got != enProbe {
+		t.Fatalf("zh account probe timeout -> en = %q, want %q", got, enProbe)
+	}
+	if got := localizeKnownReason(LangZH, enProbe); got != zhProbe {
+		t.Fatalf("en account probe timeout -> zh = %q, want %q", got, zhProbe)
+	}
+}
+
+func TestHTTPTimeoutReasonUses25sNotAccountBudget(t *testing.T) {
+	err := &probeHTTPTimeoutError{d: probeHTTPTimeout, method: "POST", url: "https://cli.example/v1"}
+	if !isProbeTimeoutErr(err) {
+		t.Fatal("typed http timeout must be recognized for retry")
+	}
+	// Simulate inspectAccountInner classification path.
+	reason := T(LangZH, "http_probe_timeout", err.d, err.method, err.url)
+	if strings.Contains(reason, "55") {
+		t.Fatalf("http timeout reason must not use account budget 55s: %q", reason)
+	}
+	if !strings.Contains(reason, "25") {
+		t.Fatalf("http timeout reason should mention 25s: %q", reason)
+	}
+	// English path
+	reasonEN := T(LangEN, "http_probe_timeout", err.d, err.method, err.url)
+	if strings.Contains(reasonEN, "55") || !strings.Contains(reasonEN, "25") {
+		t.Fatalf("en http timeout reason = %q", reasonEN)
+	}
+}
+
+func TestBusyUnbanIsLocalized(t *testing.T) {
+	old := engine
+	engine = &inspectionEngine{workers: defaultWorkers}
+	// Force unban busy.
+	unbanJob.mu.Lock()
+	prev := unbanJob.running
+	unbanJob.running = true
+	unbanJob.mu.Unlock()
+	t.Cleanup(func() {
+		unbanJob.mu.Lock()
+		unbanJob.running = prev
+		unbanJob.mu.Unlock()
+		engine = old
+	})
+
+	errZH := engine.start(startRequest{Workers: 2, Lang: "zh"})
+	errEN := engine.start(startRequest{Workers: 2, Lang: "en"})
+	if errZH == nil || errEN == nil {
+		t.Fatal("expected busy errors")
+	}
+	if statusFromError(errZH, 0) != http.StatusConflict || statusFromError(errEN, 0) != http.StatusConflict {
+		t.Fatalf("status zh=%d en=%d", statusFromError(errZH, 0), statusFromError(errEN, 0))
+	}
+	if errZH.Error() != T(LangZH, "busy_unban") {
+		t.Fatalf("zh busy = %q, want %q", errZH.Error(), T(LangZH, "busy_unban"))
+	}
+	if errEN.Error() != T(LangEN, "busy_unban") {
+		t.Fatalf("en busy = %q, want %q", errEN.Error(), T(LangEN, "busy_unban"))
+	}
+	if errZH.Error() == errEN.Error() {
+		t.Fatalf("zh/en busy messages should differ: %q", errZH)
+	}
+}
+
+func TestUIExportLocalizesReason(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	if !strings.Contains(page, "function sanitizeExportRow") {
+		t.Fatal("sanitizeExportRow missing")
+	}
+	// Export must run reasons through localizeKnownReason for current UI language.
+	if !strings.Contains(page, "o.reason = localizeKnownReason(") {
+		t.Fatal("export path must localize reason via localizeKnownReason")
+	}
+}

@@ -147,9 +147,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		// Capture page Management Key for background delete/auth API calls.
 		password := resolveManagementPassword(req.Headers)
 		if err := engine.startApply(body, password, req.Headers); err != nil {
-			status := http.StatusConflict
+			status := statusFromError(err, http.StatusConflict)
 			msg := err.Error()
-			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") {
+			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") || strings.Contains(msg, "no recommended") {
 				status = http.StatusBadRequest
 			}
 			return jsonResponse(status, map[string]any{"error": msg})
@@ -173,12 +173,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		password := resolveManagementPassword(req.Headers)
 		seq, action, err := engine.startAction(body, password, req.Headers)
 		if err != nil {
-			status := http.StatusConflict
-			if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "busy") {
+			status := statusFromError(err, http.StatusConflict)
+			if strings.Contains(err.Error(), "required") {
 				status = http.StatusBadRequest
-				if strings.Contains(err.Error(), "busy") {
-					status = http.StatusConflict
-				}
 			}
 			return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
 		}

@@ -491,7 +491,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 	unbanJob.mu.Unlock()
 	if unbanBusy {
 		e.mu.Unlock()
-		return httpErr(http.StatusConflict, fmt.Errorf("busy: unban in progress"))
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
 	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()

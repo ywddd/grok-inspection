@@ -479,16 +479,17 @@ func cloneHTTPHeader(src http.Header) http.Header {
 
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
 	e.mu.Lock()
+	lang := e.lang
 	if e.running || e.applying || e.applyDraining || e.actionInFlight > 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("busy")
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_generic")))
 	}
 	unbanJob.mu.Lock()
 	unbanBusy := unbanJob.running
 	unbanJob.mu.Unlock()
 	if unbanBusy {
 		e.mu.Unlock()
-		return fmt.Errorf("busy: unban in progress")
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
 	}
 	candidates, errCollect := e.collectCandidates(req)
 	if errCollect != nil {
@@ -539,20 +540,21 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 	key := firstNonEmpty(req.AuthIndex, req.Name, name)
 
 	e.mu.Lock()
+	lang := e.lang
 	if e.running {
 		e.mu.Unlock()
-		return 0, "", fmt.Errorf("busy: inspection running")
+		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_inspection")))
 	}
 	if e.applying || e.applyDraining {
 		e.mu.Unlock()
-		return 0, "", fmt.Errorf("busy: bulk apply in progress")
+		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_apply")))
 	}
 	unbanJob.mu.Lock()
 	unbanBusy := unbanJob.running
 	unbanJob.mu.Unlock()
 	if unbanBusy {
 		e.mu.Unlock()
-		return 0, "", fmt.Errorf("busy: unban in progress")
+		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
 	}
 	e.actionSeq++
 	seq := e.actionSeq
@@ -651,7 +653,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 			e.mu.Unlock()
 			return
 		}
-		e.applyCurrent = fmt.Sprintf("delete batch %d-%d/%d", i+1, end, len(deletes))
+		e.applyCurrent = T(e.lang, "apply_delete_batch", i+1, end, len(deletes))
 		e.mu.Unlock()
 
 		batchFails := deleteAuthFilesBatch(chunk, password, headers, false)
@@ -710,7 +712,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 				e.mu.Unlock()
 				return
 			}
-			e.applyCurrent = item.Action + " " + item.Name
+			e.applyCurrent = localizedActionVerb(e.lang, item.Action) + " " + item.Name
 			e.mu.Unlock()
 
 			// Prefer physical auth file name so CPA Auth dir entry is deleted correctly.

@@ -149,7 +149,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		if err := engine.startApply(body, password, req.Headers); err != nil {
 			status := statusFromError(err, http.StatusConflict)
 			msg := err.Error()
-			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") || strings.Contains(msg, "no recommended") {
+			// Input validation only → 400. "no recommended actions" stays 409 Conflict
+			// (empty suggestion set is a conflict with current job/results state, not bad input).
+			if strings.Contains(msg, "force_action") || strings.Contains(msg, "requires") || strings.Contains(msg, "no accounts") {
 				status = http.StatusBadRequest
 			}
 			return jsonResponse(status, map[string]any{"error": msg})

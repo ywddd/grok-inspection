@@ -206,7 +206,7 @@ func TestResourcePageHasExportAndBatchOps(t *testing.T) {
 		`classificationsForFilter`,
 		`mode === 'filter'`,
 		`body.incremental = true`,
-		`['other','异常'`,
+		`t('class_other')`,
 	}
 	for _, marker := range required {
 		if !strings.Contains(page, marker) {
@@ -323,12 +323,12 @@ func TestManagementBansCountMatchesList(t *testing.T) {
 		t.Fatalf("status=%d body=%s", resp.StatusCode, string(resp.Body))
 	}
 	var payload struct {
-		Count         int                      `json:"count"`
-		Bans          []map[string]interface{} `json:"bans"`
-		Quota         int                      `json:"quota_count"`
-		Permission    int                      `json:"permission_count"`
-		Unauthorized  int                      `json:"unauthorized_count"`
-		Manual        int                      `json:"manual_count"`
+		Count        int                      `json:"count"`
+		Bans         []map[string]interface{} `json:"bans"`
+		Quota        int                      `json:"quota_count"`
+		Permission   int                      `json:"permission_count"`
+		Unauthorized int                      `json:"unauthorized_count"`
+		Manual       int                      `json:"manual_count"`
 	}
 	if err := json.Unmarshal(resp.Body, &payload); err != nil {
 		t.Fatalf("unmarshal: %v body=%s", err, string(resp.Body))

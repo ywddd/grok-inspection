@@ -564,7 +564,15 @@ func TestCallCPAManagementDoesNotRetryOriginAfterHTTPError(t *testing.T) {
 func TestStartRejectsInvalidWorkers(t *testing.T) {
 	e := &inspectionEngine{workers: defaultWorkers}
 	err := e.start(startRequest{Workers: 99})
-	if err == nil || !strings.Contains(err.Error(), "workers must") {
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if statusFromError(err, 0) != http.StatusBadRequest {
+		t.Fatalf("status = %d err=%v", statusFromError(err, 0), err)
+	}
+	// Message is localized; do not depend on English-only wording.
+	msg := err.Error()
+	if !(strings.Contains(msg, "workers") || strings.Contains(msg, "并发") || strings.Contains(msg, "Workers") || strings.Contains(msg, "1") && strings.Contains(msg, "16")) {
 		t.Fatalf("err = %v", err)
 	}
 }

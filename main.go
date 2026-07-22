@@ -13,7 +13,7 @@ import (
 const (
 	pluginName            = "grok-inspection"
 	pluginDisplayName     = "Grok 账号巡检"
-	pluginVersion         = "0.1.13"
+	pluginVersion         = "0.1.14"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -120,22 +120,16 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	case method == http.MethodGet && matchesManagementPath(req.Path, "/status"):
 		// Pure memory snapshot — never blocks on host or management HTTP.
 		// light=1 / include_results=0: progress meta only (cheap poll during inspect/apply).
-		return jsonResponse(http.StatusOK, engine.snapshot(statusWantsResults(req)))
+		// lang= rewrites known stored reasons for the UI language without mutating memory.
+		return jsonResponse(http.StatusOK, engine.snapshotWithLang(statusWantsResults(req), firstQueryValue(req, "lang")))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/start"):
 		var body startRequest
 		if len(req.Body) > 0 {
 			_ = json.Unmarshal(req.Body, &body)
 		}
 		if err := engine.start(body); err != nil {
-			status := http.StatusConflict
-			msg := err.Error()
-			if strings.Contains(msg, "workers must") || strings.Contains(msg, "增量巡检") || strings.Contains(msg, "分类巡检") || strings.Contains(msg, "当前分类") || strings.Contains(msg, "busy") {
-				status = http.StatusBadRequest
-				if strings.Contains(msg, "busy") || strings.Contains(msg, "already running") {
-					status = http.StatusConflict
-				}
-			}
-			return jsonResponse(status, map[string]any{"error": msg})
+			status := statusFromError(err, http.StatusConflict)
+			return jsonResponse(status, map[string]any{"error": err.Error()})
 		}
 		return jsonResponse(http.StatusOK, engine.snapshot(true))
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/stop"):
@@ -375,3 +369,13 @@ func jsonResponse(statusCode int, payload any) pluginapi.ManagementResponse {
 	}
 }
 
+func firstQueryValue(req pluginapi.ManagementRequest, key string) string {
+	if req.Query == nil {
+		return ""
+	}
+	vals := req.Query[key]
+	if len(vals) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(vals[0])
+}

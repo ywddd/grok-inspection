@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -25,6 +26,11 @@ const (
 	// Whole-account budget allows the primary response probe plus an ambiguous-result
 	// fallback, while timeout retries are scheduled separately by the engine.
 	accountProbeTimeout = 55 * time.Second
+)
+
+var (
+	errHTTPProbeTimeout    = errors.New("http_probe_timeout")
+	errListAccountsTimeout = errors.New("list_accounts_timeout")
 )
 
 type apiCallResponse struct {
@@ -108,15 +114,23 @@ func inspectAccountInner(file pluginapi.HostAuthFileEntry, model string, lang La
 	chatBody := fmt.Sprintf(`{"model":%q,"input":"ping","stream":false}`, model)
 	chatResp, errChat := callHostAPICall(file.AuthIndex, http.MethodPost, xaiResponsesURL, []byte(chatBody), true)
 	if errChat != nil {
+		reqErr := errChat.Error()
+		if isProbeTimeoutErr(errChat) {
+			base.Classification = "probe_error"
+			base.Action = "keep"
+			base.Reason = T(lang, "probe_timeout", accountProbeTimeout)
+			base.ErrorMessage = "account probe timeout"
+			return base
+		}
 		classified := classifyProbe(classifyInput{
 			Lang:         lang,
 			Disabled:     base.Disabled,
-			RequestError: errChat.Error(),
+			RequestError: reqErr,
 		})
 		base.Classification = classified.Classification
 		base.Action = classified.Action
 		base.Reason = classified.Reason
-		base.ErrorMessage = errChat.Error()
+		base.ErrorMessage = reqErr
 		return base
 	}
 	// One short retry on bare 429: concurrent inspection often trips temporary throttling.
@@ -177,7 +191,7 @@ func newProbeOutcome(resp apiCallResponse, disabled bool, lang Lang) probeOutcom
 		Response: resp,
 		Error:    parsed,
 		Classified: classifyProbe(classifyInput{
-			Lang:         lang,
+			Lang:       lang,
 			ChatStatus: resp.StatusCode,
 			ChatCode:   parsed.Code,
 			ChatError:  parsed.Message,
@@ -215,8 +229,12 @@ func isProbeTimeoutErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, errHTTPProbeTimeout) {
+		return true
+	}
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "超时") || strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out")
+	return strings.Contains(msg, "超时") || strings.Contains(msg, "timeout") || strings.Contains(msg, "timed out") ||
+		strings.Contains(msg, "http_probe_timeout")
 }
 
 // callHostAPICall runs one timed host.http.do. Timeout retries are deferred to
@@ -242,7 +260,7 @@ func callHostAPICallOnce(authIndex, method, rawURL string, body []byte, jsonBody
 	case out := <-ch:
 		return out.resp, out.err
 	case <-time.After(probeHTTPTimeout):
-		return apiCallResponse{}, fmt.Errorf("%s", T(LangZH, "http_probe_timeout", probeHTTPTimeout, method, rawURL))
+		return apiCallResponse{}, fmt.Errorf("%w: %s %s %s", errHTTPProbeTimeout, probeHTTPTimeout, method, rawURL)
 	}
 }
 
@@ -321,7 +339,7 @@ func callHostAuthList() (authListResponse, error) {
 	case out := <-ch:
 		return out.resp, out.err
 	case <-time.After(30 * time.Second):
-		return authListResponse{}, fmt.Errorf("%s", T(LangZH, "list_accounts_timeout"))
+		return authListResponse{}, errListAccountsTimeout
 	}
 }
 

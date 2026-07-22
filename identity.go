@@ -180,9 +180,8 @@ func stringSet(values []string) map[string]struct{} {
 	return out
 }
 
-
 // cancelledAccountResult marks an account that was not probed because the job stopped.
-func cancelledAccountResult(file pluginapi.HostAuthFileEntry, model string) accountResult {
+func cancelledAccountResult(file pluginapi.HostAuthFileEntry, model string, lang Lang) accountResult {
 	name := firstNonEmpty(file.Email, file.Label, file.Name, file.AuthIndex, file.ID)
 	base := accountResult{
 		AuthIndex:      file.AuthIndex,
@@ -195,7 +194,7 @@ func cancelledAccountResult(file pluginapi.HostAuthFileEntry, model string) acco
 		Model:          model,
 		Classification: "probe_error",
 		Action:         "keep",
-		Reason:         T(LangZH, "stopped_before_probe"),
+		Reason:         T(normalizeLang(string(lang)), "stopped_before_probe"),
 	}
 	if !file.ModTime.IsZero() {
 		base.FileModUnix = file.ModTime.Unix()
@@ -235,4 +234,3 @@ func resultContainsAuthFile(results []accountResult, file pluginapi.HostAuthFile
 	}
 	return false
 }
-

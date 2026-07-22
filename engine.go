@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -89,12 +91,45 @@ type jobSnapshot struct {
 	Unban        map[string]any `json:"unban,omitempty"`
 }
 
+// httpStatusError pairs a stable HTTP status with a localized operator message.
+// Status mapping must not depend on message language.
+type httpStatusError struct {
+	status int
+	err    error
+}
+
+func (e *httpStatusError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *httpStatusError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func statusFromError(err error, fallback int) int {
+	var he *httpStatusError
+	if errors.As(err, &he) && he != nil && he.status > 0 {
+		return he.status
+	}
+	return fallback
+}
+
+func httpErr(status int, err error) error {
+	return &httpStatusError{status: status, err: err}
+}
+
 type startRequest struct {
 	// Lang selects operator-facing runtime message language: "zh" (default) or "en".
-	Lang string `json:"lang"`
-	Workers         int  `json:"workers"`
-	IncludeDisabled bool `json:"include_disabled"`
-	OnlyDisabled    bool `json:"only_disabled"`
+	Lang            string `json:"lang"`
+	Workers         int    `json:"workers"`
+	IncludeDisabled bool   `json:"include_disabled"`
+	OnlyDisabled    bool   `json:"only_disabled"`
 	// Incremental only probes Auth accounts not already present in the last results.
 	Incremental bool `json:"incremental"`
 	// Classifications re-probes only accounts whose last classification matches.
@@ -126,7 +161,7 @@ type authListResponse struct {
 }
 
 type inspectionEngine struct {
-	lang              Lang // operator-facing language for this run (default zh)
+	lang             Lang // operator-facing language for this run (default zh)
 	mu               sync.Mutex
 	runWG            sync.WaitGroup
 	persistWG        sync.WaitGroup // async persistLocked writers
@@ -189,9 +224,17 @@ func normalizeWorkers(workers int) (int, error) {
 		return defaultWorkers, nil
 	}
 	if workers < minWorkers || workers > maxWorkers {
-		return 0, fmt.Errorf("workers must be an integer between %d and %d", minWorkers, maxWorkers)
+		return 0, httpErr(http.StatusBadRequest, fmt.Errorf("workers_invalid"))
 	}
 	return workers, nil
+}
+
+func normalizeWorkersLocalized(workers int, lang Lang) (int, error) {
+	n, err := normalizeWorkers(workers)
+	if err == nil {
+		return n, nil
+	}
+	return 0, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "workers_range", minWorkers, maxWorkers)))
 }
 
 func slowRetryWorkers(workers int) int {
@@ -348,9 +391,20 @@ func summarizeResults(results []accountResult) map[string]int {
 // snapshot builds a status payload. When includeResults is false (light poll),
 // Results is omitted so progress polling stays cheap with 1000+ accounts.
 func (e *inspectionEngine) snapshot(includeResults bool) jobSnapshot {
+	return e.snapshotWithLang(includeResults, "")
+}
+
+func (e *inspectionEngine) snapshotWithLang(includeResults bool, lang string) jobSnapshot {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.snapshotLocked(includeResults)
+	snap := e.snapshotLocked(includeResults)
+	if includeResults && lang != "" {
+		l := normalizeLang(lang)
+		for i := range snap.Results {
+			snap.Results[i].Reason = localizeKnownReason(l, snap.Results[i].Reason)
+		}
+	}
+	return snap
 }
 
 func (e *inspectionEngine) snapshotLocked(includeResults bool) jobSnapshot {
@@ -412,39 +466,40 @@ func (e *inspectionEngine) recordRowActionLocked(seq uint64, key, action string,
 }
 
 func (e *inspectionEngine) start(req startRequest) error {
-	workers, errWorkers := normalizeWorkers(req.Workers)
+	lang := normalizeLang(req.Lang)
+	workers, errWorkers := normalizeWorkersLocalized(req.Workers, lang)
 	if errWorkers != nil {
 		return errWorkers
 	}
 	classifications := normalizeClassifications(req.Classifications)
 	classifyScoped := len(classifications) > 0
 	if classifyScoped && req.Incremental {
-		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "category_with_incremental"))
+		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_with_incremental")))
 	}
 
 	e.mu.Lock()
 	if e.running || e.applying || e.applyDraining {
 		e.mu.Unlock()
-		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "already_running"))
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "already_running")))
 	}
 	if e.actionInFlight > 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "busy_row_action"))
+		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_row_action")))
 	}
 	unbanJob.mu.Lock()
 	unbanBusy := unbanJob.running
 	unbanJob.mu.Unlock()
 	if unbanBusy {
 		e.mu.Unlock()
-		return fmt.Errorf("busy: unban in progress")
+		return httpErr(http.StatusConflict, fmt.Errorf("busy: unban in progress"))
 	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "incremental_needs_results"))
+		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "incremental_needs_results")))
 	}
 	if classifyScoped && len(e.results) == 0 {
 		e.mu.Unlock()
-		return fmt.Errorf("%s", T(normalizeLang(req.Lang), "category_needs_results"))
+		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_needs_results")))
 	}
 	if classifyScoped {
 		matched := 0
@@ -456,7 +511,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 		}
 		if matched == 0 {
 			e.mu.Unlock()
-			return fmt.Errorf("%s", T(normalizeLang(req.Lang), "no_accounts_in_category"))
+			return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "no_accounts_in_category")))
 		}
 	}
 	includeDisabled := req.IncludeDisabled
@@ -464,7 +519,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 	if onlyDisabled {
 		includeDisabled = false
 	}
-	e.lang = normalizeLang(req.Lang)
+	e.lang = lang
 	e.running = true
 	e.stopped = false
 	e.applying = false
@@ -544,7 +599,7 @@ func (e *inspectionEngine) abortRunLocked() {
 		if resultContainsAuthFile(e.results, file) {
 			continue
 		}
-		item := cancelledAccountResult(file, model)
+		item := cancelledAccountResult(file, model, e.lang)
 		if e.runClassifyScoped {
 			if idx := findResultIndex(e.results, item); idx >= 0 {
 				e.results[idx] = item
@@ -726,12 +781,16 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		// Keep previous results on list failure (full inspect no longer wipes early).
 		// Use a stable auth_index so repeated failures do not accumulate fake rows.
 		write := e.upsertResult
+		listReason := T(e.lang, "list_accounts_failed", errList.Error())
+		if errors.Is(errList, errListAccountsTimeout) {
+			listReason = T(e.lang, "list_accounts_timeout")
+		}
 		write(runID, accountResult{
 			AuthIndex:      "__system_list_error__",
 			Name:           "system",
 			Classification: "probe_error",
 			Action:         "keep",
-			Reason:         T(e.lang, "list_accounts_failed", errList.Error()),
+			Reason:         listReason,
 		})
 		return
 	}

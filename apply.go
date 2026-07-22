@@ -351,8 +351,8 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 	failedNames := map[string]string{}
 	if status == http.StatusMultiStatus || len(raw) > 0 {
 		var payload struct {
-			Status  string `json:"status"`
-			Failed  []struct {
+			Status string `json:"status"`
+			Failed []struct {
 				Name  string `json:"name"`
 				Error string `json:"error"`
 			} `json:"failed"`
@@ -607,7 +607,7 @@ func (e *inspectionEngine) runApply(applyID uint64, candidates []accountResult, 
 		banSaveErr := saveActiveStoreErr()
 		e.mu.Lock()
 		if banSaveErr != nil {
-			e.applyFailures = append(e.applyFailures, T(LangZH, "save_autoban_state_failed", banSaveErr.Error()))
+			e.applyFailures = append(e.applyFailures, T(e.lang, "save_autoban_state_failed", banSaveErr.Error()))
 			if len(e.applyFailures) > 20 {
 				e.applyFailures = e.applyFailures[:20]
 			}

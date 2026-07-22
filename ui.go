@@ -543,7 +543,7 @@ func renderUIPage(pluginID string) []byte {
           <h2 data-i18n="ban_title">实时自动禁用</h2>
         </div>
         <div class="switch-row">
-          <label class="switch" title="开启后实时拦截并禁用">
+          <label class="switch" data-i18n-title="ban_enable" title="开启后实时拦截并禁用">
             <input id="banEnabledToggle" type="checkbox">
             <span class="slider"></span>
           </label>
@@ -560,15 +560,15 @@ func renderUIPage(pluginID string) []byte {
       <div id="banSummary" class="summary ban-summary">
         <div class="card active" data-ban-filter="all"><div class="k" data-i18n="ban_all">全部</div><div class="v" id="banCount">0</div></div>
         <div class="card" data-ban-filter="quota"><div class="k" data-i18n="ban_quota">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>
-        <div class="card" data-ban-filter="permission"><div class="k">权限拒绝</div><div class="v" id="banPermissionCount">0</div></div>
-        <div class="card" data-ban-filter="unauthorized"><div class="k">401 认证失败</div><div class="v" id="banUnauthorizedCount">0</div></div>
+        <div class="card" data-ban-filter="permission"><div class="k" data-i18n="ban_permission">权限拒绝</div><div class="v" id="banPermissionCount">0</div></div>
+        <div class="card" data-ban-filter="unauthorized"><div class="k" data-i18n="ban_authfail">401 认证失败</div><div class="v" id="banUnauthorizedCount">0</div></div>
       </div>
       <div class="table-wrap account-pool">
         <div class="table-scroll">
           <table class="ban-table">
             <thead>
               <tr>
-                <th class="col-name" data-i18n="th_account">账号</th><th data-i18n="ban_th_reason">禁用原因</th><th>禁用时间</th><th>恢复方式</th><th>剩余</th><th class="col-ops" data-i18n="th_ops">操作</th>
+                <th class="col-name" data-i18n="th_account">账号</th><th data-i18n="ban_th_reason">禁用原因</th><th data-i18n="ban_th_time">禁用时间</th><th data-i18n="ban_th_restore">恢复方式</th><th data-i18n="ban_th_remain">剩余</th><th class="col-ops" data-i18n="th_ops">操作</th>
               </tr>
             </thead>
             <tbody id="banRows"></tbody>
@@ -584,8 +584,8 @@ func renderUIPage(pluginID string) []byte {
         <div id="confirmTitle" class="modal-title" data-i18n="confirm_title">确认操作</div>
         <div id="confirmMsg" class="modal-msg"></div>
         <div class="modal-actions">
-          <button type="button" id="confirmCancel">取消</button>
-          <button type="button" id="confirmOk" class="primary">确定</button>
+          <button type="button" id="confirmCancel" data-i18n="cancel">取消</button>
+          <button type="button" id="confirmOk" class="primary" data-i18n="ok">确定</button>
         </div>
       </div>
     </div>
@@ -603,9 +603,9 @@ func renderUIPage(pluginID string) []byte {
       ban_enabled_hint:'开关会立即生效并保存',
       ban_refresh:'刷新状态', ban_unban_filter:'解禁当前分类', ban_unban_all:'全部解禁',
       ban_filter_hint:'点击下方卡片筛选分类',
-      ban_all:'全部', ban_quota:'额度用尽', ban_permission:'权限被拒绝', ban_authfail:'认证失败',
+      ban_all:'全部', ban_quota:'额度用尽', ban_permission:'权限拒绝', ban_authfail:'401 认证失败',
       ban_manual:'需手动解禁', ban_auto_restore:'定时自动恢复',
-      ban_th_account:'账号', ban_th_reason:'禁用原因', ban_th_time:'禁用时间', ban_th_restore:'恢复方式', ban_th_remain:'剩余',, ban_th_until:'恢复时间', ban_th_ops:'操作',
+      ban_th_account:'账号', ban_th_reason:'禁用原因', ban_th_time:'禁用时间', ban_th_restore:'恢复方式', ban_th_remain:'剩余', ban_th_until:'恢复时间', ban_th_ops:'操作',
       ban_empty:'当前没有自动禁用中的账号',
       ban_unban:'解禁',
       ban_status_loading:'加载中…',
@@ -668,7 +668,48 @@ func renderUIPage(pluginID string) []byte {
       start_failed:'启动失败', suggested_running_prefix:'建议操作已在后台执行：共 ', items_word:' 项',
       suggested_started:'建议操作已启动', bg_actions:'后台执行操作 ', failed_sep:'；失败 ',
       no_action_seq:'服务端未返回 action_seq，无法确认执行结果',
-      deleted_prefix:'删除成功：', disabled_prefix:'禁用成功：', enabled_prefix:'启用成功：', running_prefix:'执行中：'
+      deleted_prefix:'删除成功：', disabled_prefix:'禁用成功：', enabled_prefix:'启用成功：', running_prefix:'执行中：',
+      key_manual:'已使用手动填写的 Key',
+      hero_autoban:'右侧开关控制实时自动禁用。命中额度用尽 / 权限拒绝 / 401 时自动禁用账号；额度用尽默认 24 小时后恢复，其余需手动解禁。',
+      filter_count_prefix:'当前分类：', filter_count_mid:'（', filter_count_suffix:' 条）',
+      action_failed_suffix:'失败',
+      bulk_confirm_title_prefix:'批量', bulk_confirm_title_suffix:'确认',
+      bulk_started_prefix:'批量',
+      no_cat_action_mid:'」下',
+      export_hint_prefix:'当前分类：',
+      unban_running:'解禁进行中 ', unban_fail_sep:' · 失败 ', unban_persist_sep:' · 保存失败: ',
+      apply_progress:'后台执行操作 ',
+      persist_fail_sep:' · 保存失败: ',
+      unban_progress_complete_fail:'保存自动禁用状态失败: ',
+      hours_minutes_mid:' 小时 ', hours_minutes_suffix:' 分', minutes_suffix:' 分',
+      ban_unknown_reason:'未知原因',
+      ban_reason_quota:'额度用尽', ban_reason_permission:'权限被拒绝', ban_reason_authfail:'认证失败',
+      restore_header_absolute:'按上游重置时间自动恢复',
+      restore_header_relative:'按 Retry-After 自动恢复',
+      restore_date_plus_fallback:'冷却窗口自动恢复',
+      restore_local_plus_fallback:'定时自动恢复',
+      ban_unban_filter_named_prefix:'解禁「', ban_unban_filter_named_suffix:'」',
+      ban_filter_hint_all:'点击下方卡片筛选分类；解禁当前分类作用于全部禁用账号',
+      ban_filter_current_prefix:'当前筛选：', ban_filter_current_mid:' · 共 ', ban_filter_current_suffix:' 个',
+      ban_empty_filter_prefix:'当前分类「', ban_empty_filter_suffix:'」没有账号',
+      ban_need_key_load:'请输入 CPA Management Key 后加载自动禁用状态',
+      ban_not_loaded:'未加载', ban_running:'运行中',
+      pager_total_prefix:'共 ', pager_total_suffix:' 个', pager_page_mid:' · 第 ', pager_page_of:' / ', pager_page_suffix:' 页',
+      unban_confirm_title:'确认解禁', unban_confirm_body_prefix:'将重新启用账号：\n',
+      unban_failed:'解禁失败', unban_success_title:'解禁成功',
+      unban_missing:'账号已不在 CPA 认证列表中，已清除本插件禁用记录',
+      unban_success_msg:'已解禁并重新启用',
+      unban_filter_empty:'当前分类没有可解禁账号',
+      unban_filter_confirm_title:'确认解禁当前分类',
+      unban_filter_confirm_body_prefix:'将解禁「', unban_filter_confirm_body_mid:'」下的 ', unban_filter_confirm_body_suffix:' 个账号。\n后台异步执行，可用停止按钮中止。',
+      unban_in_progress:'解禁中…', unban_start_failed:'启动解禁失败',
+      unban_filter_started_prefix:'分类解禁已在后台执行：共 ', unban_filter_started_suffix:' 个',
+      unban_all_confirm_title:'确认全部解禁',
+      unban_all_confirm_body:'将尝试解禁当前禁用池中的全部账号。\n后台异步执行，可用停止按钮中止。',
+      unban_all_started:'全部解禁已在后台执行',
+      notice_title:'提示',
+      apply_disable_line:'· 禁用 ', apply_enable_line:'· 启用 ', apply_delete_line:'· 删除 ',
+      apply_body_counts_mid:' 个\n',
     },
     en: {
       tab_inspect:'Account inspection', tab_inspect_desc:'Batch probe · suggested actions',
@@ -680,9 +721,9 @@ func renderUIPage(pluginID string) []byte {
       ban_enabled_hint:'Toggle applies immediately and is saved',
       ban_refresh:'Refresh status', ban_unban_filter:'Unban current filter', ban_unban_all:'Unban all',
       ban_filter_hint:'Click a card below to filter',
-      ban_all:'All', ban_quota:'Quota exhausted', ban_permission:'Permission denied', ban_authfail:'Auth failed',
+      ban_all:'All', ban_quota:'Quota exhausted', ban_permission:'Permission denied', ban_authfail:'401 auth failed',
       ban_manual:'Manual unban required', ban_auto_restore:'Auto restore on schedule',
-      ban_th_account:'Account', ban_th_reason:'Ban reason', ban_th_time:'Banned at', ban_th_restore:'Restore mode', ban_th_remain:'Remaining',, ban_th_until:'Restore at', ban_th_ops:'Actions',
+      ban_th_account:'Account', ban_th_reason:'Ban reason', ban_th_time:'Banned at', ban_th_restore:'Restore mode', ban_th_remain:'Remaining', ban_th_until:'Restore at', ban_th_ops:'Actions',
       ban_empty:'No accounts are currently auto-banned',
       ban_unban:'Unban',
       ban_status_loading:'Loading…',
@@ -699,7 +740,7 @@ func renderUIPage(pluginID string) []byte {
       th_account:'Account', th_status:'Current status', th_result:'Probe result', th_model:'Model', th_action:'Suggestion', th_reason:'Reason', th_ops:'Actions',
       class_healthy:'Healthy', class_permission_denied:'Permission denied', class_quota_exhausted:'Quota exhausted',
       class_reauth:'Reauth required', class_model_unavailable:'Model unavailable', class_probe_error:'Probe error', class_unknown:'Unknown',
-      class_all:'All', class_other:'error',
+      class_all:'All', class_other:'Other',
       action_keep:'Keep', action_disable:'Disable', action_enable:'Enable', action_delete:'Delete',
       enabled:'Enabled', disabled:'Disabled', failed:'Failed', running:'Running',
       need_key:'Enter the CPA Management Key first', need_key_load:'Enter the CPA Management Key to load inspection status',
@@ -745,7 +786,48 @@ func renderUIPage(pluginID string) []byte {
       start_failed:'Start failed', suggested_running_prefix:'Suggested actions running in background: ', items_word:' item(s)',
       suggested_started:'Suggested actions started', bg_actions:'Background actions ', failed_sep:'; failed ',
       no_action_seq:'Server did not return action_seq; cannot confirm the action result',
-      deleted_prefix:'Deleted: ', disabled_prefix:'Disabled: ', enabled_prefix:'Enabled: ', running_prefix:'Running: '
+      deleted_prefix:'Deleted: ', disabled_prefix:'Disabled: ', enabled_prefix:'Enabled: ', running_prefix:'Running: ',
+      key_manual:'Using a manually entered Key',
+      hero_autoban:'Use the switch to control realtime auto-ban. Quota exhausted / permission denied / 401 are auto-banned; quota bans restore after 24h by default, others need manual unban.',
+      filter_count_prefix:'Current category: ', filter_count_mid:' (', filter_count_suffix:' rows)',
+      action_failed_suffix:' failed',
+      bulk_confirm_title_prefix:'Bulk ', bulk_confirm_title_suffix:' confirm',
+      bulk_started_prefix:'Bulk ',
+      no_cat_action_mid:'" — ',
+      export_hint_prefix:'Current category: ',
+      unban_running:'Unban in progress ', unban_fail_sep:' · failed ', unban_persist_sep:' · save failed: ',
+      apply_progress:'Background actions ',
+      persist_fail_sep:' · save failed: ',
+      unban_progress_complete_fail:'Failed to save auto-ban state: ',
+      hours_minutes_mid:'h ', hours_minutes_suffix:'m', minutes_suffix:'m',
+      ban_unknown_reason:'Unknown reason',
+      ban_reason_quota:'Quota exhausted', ban_reason_permission:'Permission denied', ban_reason_authfail:'Auth failed',
+      restore_header_absolute:'Auto restore at upstream reset time',
+      restore_header_relative:'Auto restore after Retry-After',
+      restore_date_plus_fallback:'Auto restore after cooldown window',
+      restore_local_plus_fallback:'Scheduled auto restore',
+      ban_unban_filter_named_prefix:'Unban "', ban_unban_filter_named_suffix:'"',
+      ban_filter_hint_all:'Click a card below to filter; unban current filter applies to all banned accounts when All is selected',
+      ban_filter_current_prefix:'Current filter: ', ban_filter_current_mid:' · ', ban_filter_current_suffix:' total',
+      ban_empty_filter_prefix:'No accounts in filter "', ban_empty_filter_suffix:'"',
+      ban_need_key_load:'Enter the CPA Management Key to load auto-ban status',
+      ban_not_loaded:'Not loaded', ban_running:'Running',
+      pager_total_prefix:'', pager_total_suffix:' total', pager_page_mid:' · page ', pager_page_of:' / ', pager_page_suffix:'',
+      unban_confirm_title:'Confirm unban', unban_confirm_body_prefix:'Re-enable account:\n',
+      unban_failed:'Unban failed', unban_success_title:'Unban succeeded',
+      unban_missing:'Account is no longer in the CPA auth list; local ban record cleared',
+      unban_success_msg:'Unbanned and re-enabled',
+      unban_filter_empty:'No accounts to unban in the current filter',
+      unban_filter_confirm_title:'Confirm unban current filter',
+      unban_filter_confirm_body_prefix:'Will unban filter "', unban_filter_confirm_body_mid:'" — ', unban_filter_confirm_body_suffix:' account(s).\nRuns in background; use Stop to cancel.',
+      unban_in_progress:'Unbanning…', unban_start_failed:'Failed to start unban',
+      unban_filter_started_prefix:'Filter unban started in background: ', unban_filter_started_suffix:'',
+      unban_all_confirm_title:'Confirm unban all',
+      unban_all_confirm_body:'Attempt to unban every account in the current ban pool.\nRuns in background; use Stop to cancel.',
+      unban_all_started:'Unban-all started in background',
+      notice_title:'Notice',
+      apply_disable_line:'· Disable ', apply_enable_line:'· Enable ', apply_delete_line:'· Delete ',
+      apply_body_counts_mid:'\n',
     }
   }
 
@@ -799,11 +881,98 @@ func renderUIPage(pluginID string) []byte {
       actionLabel.delete = t('action_delete');
     }
   }
+
+  // Operator-facing probe reasons stored from the Go runtime. Keep catalogs aligned with i18n.go.
+  const REASON_I18N = {
+    zh: {
+      auth_expired:'认证已过期或失效',
+      quota_exhausted:'额度已用尽',
+      temp_rate_limited:'临时限流 (HTTP 429)，建议稍后重试',
+      permission_denied:'对话权限被拒绝',
+      model_unavailable:'测试模型不可用',
+      chat_ok:'对话测试成功',
+      probe_failed:'探测失败',
+      unable_classify:'无法可靠分类',
+      stopped_before_probe:'已停止，未探测',
+      stopped:'已停止',
+      account_missing:'Auth 列表中已不存在该账号',
+      missing_auth_index:'缺少 auth_index',
+      fallback_disagreed:'；备用接口结果不一致，按主探测结果判定',
+      list_accounts_timeout:'列出账号超时（30s）',
+      probe_timeout_prefix:'探测超时（>'
+    },
+    en: {
+      auth_expired:'Authentication expired or invalid',
+      quota_exhausted:'Quota exhausted',
+      temp_rate_limited:'Temporarily rate-limited (HTTP 429); retry later',
+      permission_denied:'Chat permission denied',
+      model_unavailable:'Probe model unavailable',
+      chat_ok:'Chat probe succeeded',
+      probe_failed:'Probe failed',
+      unable_classify:'Unable to classify reliably',
+      stopped_before_probe:'Stopped before probing',
+      stopped:'Stopped',
+      account_missing:'Account no longer exists in the Auth list',
+      missing_auth_index:'Missing auth_index',
+      fallback_disagreed:'; fallback endpoint disagreed; using primary probe result',
+      list_accounts_timeout:'Listing accounts timed out (30s)',
+      probe_timeout_prefix:'Probe timed out (>'
+    }
+  };
+  function reasonText(key) {
+    const pack = REASON_I18N[lang] || REASON_I18N.zh;
+    return (pack && pack[key]) || (REASON_I18N.zh && REASON_I18N.zh[key]) || key;
+  }
+  function localizeKnownReason(reason) {
+    reason = String(reason == null ? '' : reason).trim();
+    if (!reason) return reason;
+    const keys = Object.keys(REASON_I18N.zh).filter((k) => k !== 'probe_timeout_prefix' && k !== 'fallback_disagreed');
+    const catalogs = [REASON_I18N.zh, REASON_I18N.en];
+    for (const key of keys) {
+      for (const cat of catalogs) {
+        const candidate = cat[key];
+        if (!candidate) continue;
+        if (reason === candidate) return reasonText(key);
+        const prefix = candidate + ' (HTTP ';
+        if (reason.indexOf(prefix) === 0 && reason.charAt(reason.length - 1) === ')') {
+          return reasonText(key) + reason.slice(candidate.length);
+        }
+        for (const catSuf of catalogs) {
+          const suf = catSuf.fallback_disagreed;
+          if (!suf || reason.length < suf.length || reason.slice(-suf.length) !== suf) continue;
+          const base = reason.slice(0, reason.length - suf.length);
+          if (base === candidate) return reasonText(key) + reasonText('fallback_disagreed');
+          if (base.indexOf(candidate + ' (HTTP ') === 0) {
+            return reasonText(key) + base.slice(candidate.length) + reasonText('fallback_disagreed');
+          }
+        }
+      }
+    }
+    // probe_timeout with duration: 探测超时（>55s） / Probe timed out (>55s)
+    for (const cat of catalogs) {
+      const p = cat.probe_timeout_prefix;
+      if (p && reason.indexOf(p) === 0) {
+        const rest = reason.slice(p.length); // e.g. 55s） or 55s)
+        return reasonText('probe_timeout_prefix') + rest.replace(/）/g, lang === 'en' ? ')' : '）').replace(/\)$/ , lang === 'zh' ? '）' : ')');
+      }
+    }
+    // list_accounts_failed prefix forms are free-form; leave unchanged if unknown.
+    for (const cat of catalogs) {
+      for (const key of Object.keys(cat)) {
+        if (reason === cat[key]) return reasonText(key);
+      }
+    }
+    return reason;
+  }
+
   function setLang(next) {
     lang = (next === 'en') ? 'en' : 'zh';
     try { localStorage.setItem(LANG_KEY, lang); } catch (e) {}
     applyStaticI18n();
+    try { syncKeyHint(); } catch (e) {}
     try { render(); } catch (e) {}
+    try { if (typeof renderBanPage === 'function') renderBanPage(); } catch (e) {}
+    try { if (typeof switchTab === 'function') switchTab(currentTab); } catch (e) {}
   }
 
     function namedTheme(value) {
@@ -917,11 +1086,11 @@ func renderUIPage(pluginID string) []byte {
   function parseWorkersStrict() {
     const raw = String($('workers').value == null ? '' : $('workers').value).trim();
     if (!/^\d+$/.test(raw)) {
-      throw new Error('并发必须是 ' + WORKERS_MIN + '-' + WORKERS_MAX + ' 的整数（当前默认 ' + WORKERS_DEFAULT + '）');
+      throw new Error(t('workers_int_prefix') + WORKERS_MIN + '-' + WORKERS_MAX + t('workers_int_mid') + WORKERS_DEFAULT + t('workers_int_suffix'));
     }
     const n = Number(raw);
     if (!Number.isInteger(n) || n < WORKERS_MIN || n > WORKERS_MAX) {
-      throw new Error('并发必须在 ' + WORKERS_MIN + '-' + WORKERS_MAX + ' 之间');
+      throw new Error(t('workers_range_prefix') + WORKERS_MIN + '-' + WORKERS_MAX + t('workers_range_suffix'));
     }
     return n;
   }
@@ -1072,14 +1241,15 @@ func renderUIPage(pluginID string) []byte {
     const hint = $('keyHint');
     if (!hint) return;
     if (hasManagementKey() && keySource === 'panel') {
-      hint.textContent = '已从管理面板自动读取 Key（无需手填）';
-      keyInput.placeholder = '已自动填充（可改）';
+      hint.textContent = t('key_from_panel');
+      keyInput.placeholder = t('key_autofill');
     } else if (hasManagementKey() && keySource === 'plugin') {
-      hint.textContent = '已使用本插件本地保存的 Key';
+      hint.textContent = t('key_local');
     } else if (hasManagementKey()) {
-      hint.textContent = '已使用手动填写的 Key';
+      hint.textContent = t('key_manual');
     } else {
-      hint.textContent = '未读到 Key：请先登录 /management.html 并勾选记住密码，或在此手动填写';
+      hint.textContent = t('key_missing');
+      keyInput.placeholder = t('key_label');
     }
   }
   const hasManagementKey = () => !!keyInput.value.trim();
@@ -1191,7 +1361,7 @@ func renderUIPage(pluginID string) []byte {
       confirmClosing = false;
       // Pause inspect polling while modal is open so cancel is not delayed by render().
       try { if (typeof stopPolling === 'function') stopPolling(); } catch (_) {}
-      titleEl.textContent = title || '确认操作';
+      titleEl.textContent = title || t('confirm_title');
       msgEl.textContent = message || '';
       if (cancelEl) cancelEl.style.display = showCancel ? '' : 'none';
       bindConfirmAction(okEl, true);
@@ -1251,12 +1421,12 @@ func renderUIPage(pluginID string) []byte {
       } else if (mode === 'filter') {
         const classes = classificationsForFilter(state.filter);
         if (!classes.length) {
-          showErr('请先点击分类卡片选择一个分类，再巡检当前分类');
+          showErr(t('pick_category_first'));
           return;
         }
         const count = filtered().length;
         if (!count) {
-          showErr('当前分类「' + filterLabel() + '」下没有可巡检账号');
+          showErr(t('no_cat_prefix') + filterLabel() + t('no_cat_suffix'));
           return;
         }
         body.classifications = classes;
@@ -1278,7 +1448,7 @@ func renderUIPage(pluginID string) []byte {
     const deadline = Date.now() + (timeoutMs || 30000);
     let lastErr = '';
     while (Date.now() < deadline) {
-      const data = await api('/status?include_results=0', { method: 'GET' });
+      const data = await api('/status?include_results=0&lang=' + encodeURIComponent(lang), { method: 'GET' });
       // Keep progress meta fresh while waiting.
       mergeLightStatus(data);
       const list = (data && data.recent_row_actions) || [];
@@ -1287,27 +1457,27 @@ func renderUIPage(pluginID string) []byte {
         if (hit.ok) return { ok: true, report: hit };
         return { ok: false, error: hit.error || (act + ' failed'), report: hit };
       }
-      lastErr = '仍在执行…';
-      render(); // show row-busy / 执行中
+      lastErr = t('still_running');
+      render(); // show row-busy / running
       await sleep(200);
     }
-    return { ok: false, error: lastErr || '操作超时，请刷新后确认是否已生效' };
+    return { ok: false, error: lastErr || t('action_timeout') };
   }
   async function runRowAction(r, act, tr) {
     const key = rowKey(r);
     if (!key || pendingOps.has(key)) return;
     if (!hasManagementKey()) {
-      showErr('请先填写 CPA Management Key');
+      showErr(t('need_key'));
       return;
     }
-    const label = act === 'delete' ? '删除' : (act === 'enable' ? '启用' : '禁用');
+    const label = act === 'delete' ? t('action_delete') : (act === 'enable' ? t('action_enable') : t('action_disable'));
     if (act === 'delete') {
-      const ok = await confirmDialog('删除确认', '将删除 CPA Auth 凭证「' + (r.name || key) + '」。\n此操作不可恢复，确认继续？');
+      const ok = await confirmDialog(t('delete_confirm_title'), t('delete_body_prefix') + (r.name || key) + t('delete_body_suffix'));
       if (!ok) return;
     }
     pendingOps.add(key);
     if (tr) tr.classList.add('row-busy');
-    showOk(label + '执行中：' + (r.name || key));
+    showOk(t('running_prefix') + (r.name || key));
     render();
     try {
       const result = await api('/action', {
@@ -1320,16 +1490,16 @@ func renderUIPage(pluginID string) []byte {
         })
       });
       if (!result || result.ok === false) {
-        throw new Error((result && result.error) || (label + '失败'));
+        throw new Error((result && result.error) || (label + t('action_failed_suffix')));
       }
       const seq = Number(result.action_seq || 0);
       if (!seq) {
-        throw new Error('服务端未返回 action_seq，无法确认执行结果');
+        throw new Error(t('no_action_seq'));
       }
       // Wait for server completion via light status (not optimistic success).
       const confirmed = await waitRowActionConfirmed(seq, key, act, 30000);
       if (!confirmed.ok) {
-        throw new Error(confirmed.error || (label + '失败'));
+        throw new Error(confirmed.error || (label + t('action_failed_suffix')));
       }
       // Confirmed success → pull full results once, then UI feedback.
       await refresh({ light: false });
@@ -1341,9 +1511,9 @@ func renderUIPage(pluginID string) []byte {
           await sleep(180);
           render();
         }
-        showOk('删除成功：' + (r.name || key));
+        showOk(t('deleted_prefix') + (r.name || key));
       } else {
-        showOk((act === 'disable' ? '禁用成功：' : '启用成功：') + (r.name || key));
+        showOk((act === 'disable' ? t('disabled_prefix') : t('enabled_prefix')) + (r.name || key));
       }
     } catch (e) {
       showErr(String(e.message || e));
@@ -1368,34 +1538,28 @@ func renderUIPage(pluginID string) []byte {
     const indexes = targetRows.map(rowKey).filter(Boolean);
     if (!targetRows.length || !indexes.length) {
       const tip = action === 'disable'
-        ? '没有「已启用」可禁用的账号'
-        : (action === 'enable' ? '没有「已禁用」可启用的账号' : '没有可操作的账号');
-      showErr('当前分类「' + filterLabel() + '」下' + tip);
+        ? t('no_enabled')
+        : (action === 'enable' ? t('no_disabled') : t('no_actionable'));
+      showErr(t('no_cat_prefix') + filterLabel() + t('no_cat_action_mid') + tip);
       return;
     }
-    const label = action === 'delete' ? '删除' : (action === 'enable' ? '启用' : '禁用');
+    const label = action === 'delete' ? t('action_delete') : (action === 'enable' ? t('action_enable') : t('action_disable'));
     const stateHint = action === 'disable'
-      ? '仅包含当前列表中状态为「已启用」的账号。'
-      : (action === 'enable' ? '仅包含当前列表中状态为「已禁用」的账号。' : '包含当前分类下全部账号。');
+      ? t('only_enabled_rows')
+      : (action === 'enable' ? t('only_disabled_rows') : t('all_in_category'));
     let extra = '';
     if (action === 'delete') {
-      extra =
-        '将调用 CPA 本体批量删除接口（DELETE /auth-files，每批最多 50 个），并更新本地结果。\n' +
-        '此操作不可恢复。';
+      extra = t('bulk_delete_api') + t('irreversible');
     } else {
-      extra =
-        '将通过 CPA Management API ' + label + '账号，并更新本地结果。\n' +
-        '说明：CPA 本体没有批量启用/禁用接口，只能逐个调用 PATCH（插件侧会并发约 6 路），' +
-        '账号多时可能较慢，上方会显示进度。\n' +
-        '若需要更快清理，可改用「批量删除」（本体支持一次删多个）。';
+      extra = t('bulk_patch_prefix') + label + t('bulk_patch_suffix') + t('bulk_patch_note') + t('bulk_patch_slow') + t('bulk_patch_hint');
     }
     const ok = await confirmDialog(
-      '批量' + label + '确认',
-      '当前分类：' + filterLabel() + '\n' +
-      '影响账号：' + indexes.length + ' 个\n' +
+      t('bulk_confirm_title_prefix') + label + t('bulk_confirm_title_suffix'),
+      t('current_category') + filterLabel() + '\n' +
+      t('affected') + indexes.length + t('units') +
       stateHint + '\n\n' +
-      '将对上述账号执行批量' + label + '。\n' + extra + '\n\n' +
-      '请确认是否继续？'
+      t('will_bulk') + label + '.\n' + extra + '\n\n' +
+      t('continue_q')
     );
     if (!ok) return;
     try {
@@ -1407,7 +1571,7 @@ func renderUIPage(pluginID string) []byte {
         })
       });
       const total = Number(result && result.apply_total || indexes.length || 0);
-      showOk('批量' + label + '已启动：共 ' + total + ' 项（后台执行，进度见上方状态）');
+      showOk(t('bulk_started_prefix') + label + t('started_prefix') + total + t('started_suffix'));
       await refresh();
     } catch (e) {
       showErr(String(e.message || e));
@@ -1416,15 +1580,15 @@ func renderUIPage(pluginID string) []byte {
   async function batchExport() {
     const rows = filtered();
     if (!rows.length) {
-      showErr('当前分类「' + filterLabel() + '」下没有可导出的数据');
+      showErr(t('no_cat_prefix') + filterLabel() + t('no_export_suffix'));
       return;
     }
     const ok = await confirmDialog(
-      '批量导出确认',
-      '当前分类：' + filterLabel() + '\n' +
-      '导出条数：' + rows.length + ' 条\n\n' +
-      '将导出当前分类下的全部账号（不是仅当前页）为 JSON 文件。\n\n' +
-      '请确认是否继续？'
+      t('export_confirm'),
+      t('current_category') + filterLabel() + '\n' +
+      t('export_count') + rows.length + t('export_rows') +
+      t('export_body') +
+      t('continue_q')
     );
     if (!ok) return;
     exportRows('json');
@@ -1487,12 +1651,12 @@ func renderUIPage(pluginID string) []byte {
   }
   function filterLabel() {
     const map = {
-      all: '全部',
-      healthy: '健康',
-      permission_denied: '权限被拒',
-      quota_exhausted: '额度用尽',
-      reauth: '需重登',
-      other: '异常'
+      all: t('class_all'),
+      healthy: t('class_healthy'),
+      permission_denied: t('class_permission_denied'),
+      quota_exhausted: t('class_quota_exhausted'),
+      reauth: t('class_reauth'),
+      other: t('class_other')
     };
     return map[state.filter] || state.filter;
   }
@@ -1533,7 +1697,7 @@ func renderUIPage(pluginID string) []byte {
   function exportRows(format) {
     const rows = filtered().map(sanitizeExportRow);
     if (!rows.length) {
-      showErr('当前筛选下没有可导出的数据');
+      showErr(t('no_export_filter'));
       return;
     }
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1571,12 +1735,12 @@ func renderUIPage(pluginID string) []byte {
     const snap = state.snapshot || {};
     const summary = snap.summary || {};
     const cards = [
-      ['total','全部', summary.total || 0],
-      ['healthy','健康', summary.healthy || 0],
-      ['permission_denied','权限被拒', summary.permission_denied || 0],
-      ['quota_exhausted','额度用尽', summary.quota_exhausted || 0],
-      ['reauth','需重登', summary.reauth || 0],
-      ['other','异常', summary.other || 0],
+      ['total', t('class_all'), summary.total || 0],
+      ['healthy', t('class_healthy'), summary.healthy || 0],
+      ['permission_denied', t('class_permission_denied'), summary.permission_denied || 0],
+      ['quota_exhausted', t('class_quota_exhausted'), summary.quota_exhausted || 0],
+      ['reauth', t('class_reauth'), summary.reauth || 0],
+      ['other', t('class_other'), summary.other || 0],
     ];
     $('summary').innerHTML = cards.map(([key,label,value]) => {
       const active = (key === 'total' && state.filter === 'all') || state.filter === key;
@@ -1588,7 +1752,7 @@ func renderUIPage(pluginID string) []byte {
     });
 
     const rows = filtered();
-    $('exportHint').textContent = '当前分类：' + filterLabel() + '（' + rows.length + ' 条）';
+    $('exportHint').textContent = t('filter_count_prefix') + filterLabel() + t('filter_count_mid') + rows.length + t('filter_count_suffix');
     const totalPages = Math.max(1, Math.ceil(rows.length / state.pageSize));
     if (state.page > totalPages) state.page = totalPages;
     const start = (state.page - 1) * state.pageSize;
@@ -1598,30 +1762,30 @@ func renderUIPage(pluginID string) []byte {
       tbody.innerHTML = '';
       $('empty').style.display = 'block';
       $('empty').textContent = hasManagementKey()
-        ? '点击“开始巡检”检测 Grok 账号'
-        : '请输入 CPA Management Key 后加载巡检状态';
+        ? t('click_start')
+        : t('need_key_load');
     } else {
       $('empty').style.display = 'none';
       tbody.innerHTML = pageRows.map((r) => {
         const key = rowKey(r);
         const busy = pendingOps.has(key) || !!snap.applying;
         const toggleAct = r.disabled ? 'enable' : 'disable';
-        const toggleLabel = r.disabled ? '启用' : '禁用';
+        const toggleLabel = r.disabled ? t('action_enable') : t('action_disable');
         // Every row always offers toggle + delete (not only classification-suggested action).
         const actionBtns = hasManagementKey()
           ? '<div class="row-actions">' +
               '<button type="button" data-act="' + toggleAct + '" ' + (busy ? 'disabled' : '') + '>' + toggleLabel + '</button>' +
-              '<button type="button" class="danger" data-act="delete" ' + (busy ? 'disabled' : '') + '>删除</button>' +
+              '<button type="button" class="danger" data-act="delete" ' + (busy ? 'disabled' : '') + '>' + t('action_delete') + '</button>' +
             '</div>'
           : '-';
         return '<tr data-key="' + escapeHtml(key) + '"' + (busy ? ' class="row-busy"' : '') + '>' +
           '<td class="col-name">' + escapeHtml(r.name) + '</td>' +
-          '<td class="col-status">' + pill(r.disabled ? '已禁用' : '已启用', r.disabled ? '#b45309' : '#047857') + '</td>' +
+          '<td class="col-status">' + pill(r.disabled ? t('disabled') : t('enabled'), r.disabled ? '#b45309' : '#047857') + '</td>' +
           '<td class="col-result">' + pill(classLabel[r.classification] || r.classification || '-', color[r.classification] || '#475569') + '</td>' +
           '<td class="col-http">' + (r.http_status || '-') + '</td>' +
           '<td class="col-model">' + escapeHtml(r.model || '-') + '</td>' +
           '<td class="col-action">' + (actionLabel[r.action] || r.action || '-') + '</td>' +
-          '<td class="col-reason">' + escapeHtml(r.reason || r.error_message || '-') + '</td>' +
+          '<td class="col-reason">' + escapeHtml(localizeKnownReason(r.reason || r.error_message || '-') ) + '</td>' +
           '<td class="col-ops">' + actionBtns + '</td>' +
         '</tr>';
       }).join('');
@@ -1637,14 +1801,14 @@ func renderUIPage(pluginID string) []byte {
     const from = rows.length ? start + 1 : 0;
     const to = Math.min(rows.length, start + state.pageSize);
     $('pager').innerHTML =
-      '<div class="pager-meta">显示 ' + from + '-' + to + ' / ' + rows.length +
-      ' · 每页 <select id="pageSize">' +
+      '<div class="pager-meta">' + t('showing') + from + '-' + to + ' / ' + rows.length +
+      t('per_page') + '<select id="pageSize">' +
       [20,50,100].map((n) => '<option value="' + n + '"' + (state.pageSize===n?' selected':'') + '>' + n + '</option>').join('') +
       '</select></div>' +
       '<div style="display:flex;gap:8px;align-items:center">' +
-      '<button id="prev"' + (state.page<=1?' disabled':'') + '>上一页</button>' +
+      '<button id="prev"' + (state.page<=1?' disabled':'') + '>' + t('prev') + '</button>' +
       '<span class="pager-meta">' + state.page + ' / ' + totalPages + '</span>' +
-      '<button id="next"' + (state.page>=totalPages?' disabled':'') + '>下一页</button></div>';
+      '<button id="next"' + (state.page>=totalPages?' disabled':'') + '>' + t('next') + '</button></div>';
     const ps = $('pageSize'); if (ps) ps.onchange = () => {
       state.pageSize = Number(ps.value)||20;
       savePrefs({ pageSize: state.pageSize });
@@ -1665,7 +1829,7 @@ func renderUIPage(pluginID string) []byte {
     $('incrBtn').disabled = !hasManagementKey() || busy || !hasResults;
     if ($('filterRunBtn')) {
       $('filterRunBtn').disabled = !hasManagementKey() || busy || state.filter === 'all' || filterCount === 0;
-      $('filterRunBtn').textContent = filterCount ? ('巡检当前分类 (' + filterCount + ')') : '巡检当前分类';
+      $('filterRunBtn').textContent = filterCount ? (t('inspect_category') + ' (' + filterCount + ')') : t('inspect_category');
     }
     $('stopBtn').disabled = !hasManagementKey() || !(snap.running || snap.applying || (snap.unban && snap.unban.running));
     $('applyBtn').disabled = !hasManagementKey() || busy || actionCount === 0;
@@ -1674,48 +1838,48 @@ func renderUIPage(pluginID string) []byte {
     $('batchEnableBtn').disabled = !hasManagementKey() || busy || enableCount === 0;
     $('batchDeleteBtn').disabled = !hasManagementKey() || busy || filteredCount === 0;
     $('applyBtn').textContent = snap.applying
-      ? ('执行中 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0))
-      : (actionCount ? ('执行建议操作 (' + actionCount + ')') : '执行建议操作');
-    $('batchExportBtn').textContent = filteredCount ? ('批量导出 (' + filteredCount + ')') : '批量导出';
-    $('batchDisableBtn').textContent = disableCount ? ('批量禁用 (' + disableCount + ')') : '批量禁用';
-    $('batchEnableBtn').textContent = enableCount ? ('批量启用 (' + enableCount + ')') : '批量启用';
-    $('batchDeleteBtn').textContent = filteredCount ? ('批量删除 (' + filteredCount + ')') : '批量删除';
+      ? (t('running') + ' ' + (snap.apply_done||0) + '/' + (snap.apply_total||0))
+      : (actionCount ? (t('apply_suggested') + ' (' + actionCount + ')') : t('apply_suggested'));
+    $('batchExportBtn').textContent = filteredCount ? (t('bulk_export') + ' (' + filteredCount + ')') : t('bulk_export');
+    $('batchDisableBtn').textContent = disableCount ? (t('bulk_disable') + ' (' + disableCount + ')') : t('bulk_disable');
+    $('batchEnableBtn').textContent = enableCount ? (t('bulk_enable') + ' (' + enableCount + ')') : t('bulk_enable');
+    $('batchDeleteBtn').textContent = filteredCount ? (t('bulk_delete') + ' (' + filteredCount + ')') : t('bulk_delete');
     if (!hasManagementKey()) {
-      setProgress('请输入 CPA Management Key 后加载巡检状态', false);
+      setProgress(t('need_key_load'), false);
     } else if (snap.unban && snap.unban.running) {
-      let msg = '解禁进行中 ' + (snap.unban.done||0) + '/' + (snap.unban.total||0) + (snap.unban.current ? ' · ' + snap.unban.current : '');
-      if ((snap.unban.failures || []).length) msg += ' · 失败 ' + snap.unban.failures.length; if (snap.unban.persist_error) msg += ' · 保存失败: ' + snap.unban.persist_error;
+      let msg = t('unban_running') + (snap.unban.done||0) + '/' + (snap.unban.total||0) + (snap.unban.current ? ' · ' + snap.unban.current : '');
+      if ((snap.unban.failures || []).length) msg += t('unban_fail_sep') + snap.unban.failures.length; if (snap.unban.persist_error) msg += t('unban_persist_sep') + snap.unban.persist_error;
       setProgress(msg, true);
     } else if (snap.applying) {
-      let msg = '后台执行操作 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
-      if ((snap.apply_failures || []).length) msg += '；失败 ' + snap.apply_failures.length;
+      let msg = t('apply_progress') + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? '：' + snap.apply_current : '');
+      if ((snap.apply_failures || []).length) msg += t('failed_sep') + snap.apply_failures.length;
       setProgress(msg, true);
     } else if (snap.running) {
       const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
-      const mode = scoped ? '分类巡检中' : (snap.incremental ? '增量巡检中' : '巡检中');
-      const extra = scoped ? '（仅当前分类，保留其他结果）' : (snap.incremental ? '（仅新增，保留已有结果）' : '（后台继续）');
+      const mode = scoped ? t('category_running') : (snap.incremental ? t('incremental_running') : t('inspect_running'));
+      const extra = scoped ? t('category_only_keep') : (snap.incremental ? t('incremental_only_keep') : t('bg_continue'));
       let phase = '';
       if (snap.probe_phase === 'retry') {
-        phase = ' · 超时复检 ' + (snap.retry_done||0) + '/' + (snap.retry_total||0) + ' · 复检并发 ' + (snap.retry_workers||1);
+        phase = t('timeout_recheck') + (snap.retry_done||0) + '/' + (snap.retry_total||0) + t('recheck_workers') + (snap.retry_workers||1);
       }
-      setProgress(mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + ' · 并发 ' + (snap.workers||WORKERS_DEFAULT) + phase + extra, true);
+      setProgress(mode + ' ' + (snap.done||0) + '/' + (snap.total||0) + t('workers_sep') + (snap.workers||WORKERS_DEFAULT) + phase + extra, true);
     } else if (snap.stopped) {
       const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
-      const mode = scoped ? '分类已停止' : (snap.incremental ? '增量已停止' : '已停止');
-      setProgress(mode + '，本轮 ' + (snap.done||0) + (snap.total ? '/' + snap.total : '') + '，列表共 ' + ((snap.results||[]).length) + ' 个账号', false);
+      const mode = scoped ? t('category_stopped') : (snap.incremental ? t('incremental_stopped') : t('stopped'));
+      setProgress(mode + t('this_run') + (snap.done||0) + (snap.total ? '/' + snap.total : '') + t('list_total') + ((snap.results||[]).length) + t('accounts_word'), false);
     } else if ((snap.results||[]).length) {
       const scoped = Array.isArray(snap.classifications) && snap.classifications.length > 0;
-      let msg = '巡检完成，共 ' + (snap.results||[]).length + ' 个账号';
+      let msg = t('inspection_complete') + (snap.results||[]).length + t('accounts_word');
       if (scoped && (snap.done||0) >= 0 && snap.total != null) {
-        msg = '分类完成：本轮检测 ' + (snap.done||0) + ' 个，列表共 ' + (snap.results||[]).length + ' 个';
+        msg = t('category_complete') + (snap.done||0) + t('list_mid') + (snap.results||[]).length + t('list_end');
       } else if (snap.incremental && (snap.done||0) >= 0 && snap.total != null) {
-        msg = '增量完成：本轮新增检测 ' + (snap.done||0) + ' 个，列表共 ' + (snap.results||[]).length + ' 个';
+        msg = t('incremental_complete') + (snap.done||0) + t('list_mid') + (snap.results||[]).length + t('list_end');
       }
-      if (snap.persist_error) msg += ' · 保存失败: ' + snap.persist_error; if (snap.store_path) msg += ' · 已落盘';
-      if ((snap.apply_failures || []).length) msg += ' · 上次操作失败 ' + snap.apply_failures.length + ' 条';
+      if (snap.persist_error) msg += t('persist_fail_sep') + snap.persist_error; if (snap.store_path) msg += t('persisted');
+      if ((snap.apply_failures || []).length) msg += t('last_fail') + snap.apply_failures.length + t('rows_word');
       setProgress(msg, false);
     } else {
-      setProgress('等待开始', false);
+      setProgress(t('waiting'), false);
     }
     const completedErrors = [];
     if ((snap.apply_failures || []).length && !snap.applying) {
@@ -1725,7 +1889,7 @@ func renderUIPage(pluginID string) []byte {
       if ((snap.unban.failures || []).length) {
         completedErrors.push(...(snap.unban.failures || []));
       } else if (snap.unban.persist_error) {
-        completedErrors.push('保存自动禁用状态失败: ' + snap.unban.persist_error);
+        completedErrors.push(t('unban_progress_complete_fail') + snap.unban.persist_error);
       }
     }
     if (completedErrors.length) {
@@ -1794,7 +1958,7 @@ func renderUIPage(pluginID string) []byte {
       return;
     }
     try {
-      const path = light ? '/status?include_results=0' : '/status?include_results=1';
+      const path = (light ? '/status?include_results=0' : '/status?include_results=1') + '&lang=' + encodeURIComponent(lang);
       const data = await api(path, { method: 'GET' });
       const busy = !!(data && (data.running || data.applying || (data.unban && data.unban.running)));
       const wasBusy = lastJobBusy;
@@ -1827,9 +1991,9 @@ func renderUIPage(pluginID string) []byte {
           if (snap.running || snap.applying) {
             // progress only path inside render is heavy; update line directly
             if (snap.applying) {
-              setProgress('后台执行操作 ' + (snap.apply_done||0) + '/' + (snap.apply_total||0), true);
+              setProgress(t('apply_progress') + (snap.apply_done||0) + '/' + (snap.apply_total||0), true);
             } else if (snap.running) {
-              setProgress('巡检中 ' + (snap.done||0) + '/' + (snap.total||0), true);
+              setProgress(t('inspect_running') + ' ' + (snap.done||0) + '/' + (snap.total||0), true);
             }
           }
         } catch (_) {}
@@ -1895,20 +2059,19 @@ func renderUIPage(pluginID string) []byte {
     const deleteN = rows.filter((r) => r.action === 'delete').length;
     const actionCount = disableN + enableN + deleteN;
     const ok = await confirmDialog(
-      '执行建议操作确认',
-      '将对全部结果中「有建议动作」的账号异步执行（共 ' + actionCount + ' 条建议）：\n' +
-      '· 禁用 ' + disableN + ' 个\n' +
-      '· 启用 ' + enableN + ' 个\n' +
-      '· 删除 ' + deleteN + ' 个\n\n' +
-      '说明：此操作按建议执行，不受上方卡片当前分类限制。\n\n' +
-      '请确认是否继续？'
+      t('apply_confirm_title'),
+      t('apply_body_prefix') + actionCount + t('apply_body_suffix') +
+      t('apply_disable_line') + disableN + t('apply_body_counts_mid') +
+      t('apply_enable_line') + enableN + t('apply_body_counts_mid') +
+      t('apply_delete_line') + deleteN + t('apply_body_counts_mid') + '\n' +
+      t('continue_q')
     );
     if (!ok) return;
     try {
       const result = await api('/apply', { method: 'POST', body: '{}' });
       const total = Number(result && result.apply_total || 0);
-      if (result && result.ok === false) throw new Error(result.error || '启动失败');
-      showOk(total ? ('建议操作已在后台执行：共 ' + total + ' 项') : '建议操作已启动');
+      if (result && result.ok === false) throw new Error(result.error || t('start_failed'));
+      showOk(total ? (t('suggested_running_prefix') + total + t('items_word')) : t('suggested_started'));
       await refresh();
     }
     catch (e) { showErr(String(e.message || e)); }
@@ -1919,10 +2082,9 @@ func renderUIPage(pluginID string) []byte {
   $('batchExportBtn').onclick = () => batchExport();
   wireExclusive();
 
-  const heroText = {
-    inspect: '「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。',
-    autoban: '右侧开关控制实时自动禁用。命中额度用尽 / 权限拒绝 / 401 时自动禁用账号；额度用尽默认 24 小时后恢复，其余需手动解禁。',
-  };
+  function heroTextFor(tab) {
+    return tab === 'autoban' ? t('hero_autoban') : t('subtitle');
+  }
   let banState = { bans: [], page: 1, pageSize: 20, meta: {}, filter: 'all' };
   let currentTab = 'inspect';
   function switchTab(name) {
@@ -1936,7 +2098,7 @@ func renderUIPage(pluginID string) []byte {
     });
     document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'panel-' + name));
     const sub = document.getElementById('heroSub');
-    if (sub) sub.textContent = heroText[name] || heroText.inspect;
+    if (sub) sub.textContent = heroTextFor(name) || heroTextFor('inspect');
     if (name === 'autoban') loadBans();
   }
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -1953,27 +2115,27 @@ func renderUIPage(pluginID string) []byte {
     if (!Number.isFinite(sec) || sec <= 0) return '—';
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec %% 3600) / 60);
-    if (h >= 24 * 30) return '需手动解禁';
-    if (h > 0) return h + ' 小时 ' + String(m).padStart(2, '0') + ' 分';
-    return m + ' 分';
+    if (h >= 24 * 30) return t('ban_manual');
+    if (h > 0) return h + t('hours_minutes_mid') + String(m).padStart(2, '0') + t('hours_minutes_suffix');
+    return m + t('minutes_suffix');
   }
   function formatBanReason(code) {
     const c = String(code || '').trim().toLowerCase();
-    if (!c) return '未知原因';
-    if (c === 'subscription:free-usage-exhausted' || c.indexOf('free-usage-exhausted') >= 0) return '额度用尽';
-    if (c === 'permission-denied' || c.indexOf('permission-denied') >= 0) return '权限被拒绝';
-    if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0) return '认证失败';
+    if (!c) return t('ban_unknown_reason');
+    if (c === 'subscription:free-usage-exhausted' || c.indexOf('free-usage-exhausted') >= 0) return t('ban_reason_quota');
+    if (c === 'permission-denied' || c.indexOf('permission-denied') >= 0) return t('ban_reason_permission');
+    if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0) return t('ban_reason_authfail');
     return code;
   }
   function formatResetSource(source, remainingSec) {
     const s = String(source || '').trim().toLowerCase();
     const sec = Number(remainingSec || 0);
-    if (s === 'manual_unban' || (Number.isFinite(sec) && sec > 24 * 30 * 3600)) return '需手动解禁';
-    if (s === 'header_absolute') return '按上游重置时间自动恢复';
-    if (s === 'header_relative') return '按 Retry-After 自动恢复';
-    if (s === 'date_plus_fallback') return '冷却窗口自动恢复';
-    if (s === 'local_plus_fallback') return '定时自动恢复';
-    if (!s) return '定时自动恢复';
+    if (s === 'manual_unban' || (Number.isFinite(sec) && sec > 24 * 30 * 3600)) return t('ban_manual');
+    if (s === 'header_absolute') return t('restore_header_absolute');
+    if (s === 'header_relative') return t('restore_header_relative');
+    if (s === 'date_plus_fallback') return t('restore_date_plus_fallback');
+    if (s === 'local_plus_fallback') return t('restore_local_plus_fallback');
+    if (!s) return t('ban_auto_restore');
     return source;
   }
   function formatShanghaiTime(raw) {
@@ -2008,10 +2170,10 @@ func renderUIPage(pluginID string) []byte {
     return 'other';
   }
   function banFilterLabel(f) {
-    if (f === 'quota') return '额度用尽';
-    if (f === 'permission') return '权限拒绝';
-    if (f === 'unauthorized') return '401 认证失败';
-    return '全部';
+    if (f === 'quota') return t('ban_quota');
+    if (f === 'permission') return t('ban_permission');
+    if (f === 'unauthorized') return t('ban_authfail');
+    return t('ban_all');
   }
   function filteredBans() {
     const list = Array.isArray(banState.bans) ? banState.bans : [];
@@ -2030,14 +2192,14 @@ func renderUIPage(pluginID string) []byte {
       const n = filtered.length;
       btn.disabled = n === 0;
       btn.textContent = f === 'all'
-        ? ('解禁当前分类' + (n ? ' (' + n + ')' : ''))
-        : ('解禁「' + banFilterLabel(f) + '」' + (n ? ' (' + n + ')' : ''));
+        ? (t('ban_unban_filter') + (n ? ' (' + n + ')' : ''))
+        : (t('ban_unban_filter_named_prefix') + banFilterLabel(f) + t('ban_unban_filter_named_suffix') + (n ? ' (' + n + ')' : ''));
     }
     const hint = document.getElementById('banFilterHint');
     if (hint) {
       hint.textContent = f === 'all'
-        ? '点击下方卡片筛选分类；解禁当前分类作用于全部禁用账号'
-        : ('当前筛选：' + banFilterLabel(f) + ' · 共 ' + filtered.length + ' 个');
+        ? t('ban_filter_hint_all')
+        : (t('ban_filter_current_prefix') + banFilterLabel(f) + t('ban_filter_current_mid') + filtered.length + t('ban_filter_current_suffix'));
     }
   }
   function setBanFilter(f) {
@@ -2065,7 +2227,7 @@ func renderUIPage(pluginID string) []byte {
         '<td>' + esc(formatShanghaiTime(b.banned_at)) + '</td>' +
         '<td>' + esc(formatResetSource(b.reset_source, b.remaining_seconds)) + '</td>' +
         '<td>' + esc(formatRemain(b.remaining_seconds)) + '</td>' +
-        '<td><button type="button" data-unban="' + esc(id).replace(/"/g, '&quot;') + '">解禁</button></td>' +
+        '<td><button type="button" data-unban="' + esc(id).replace(/"/g, '&quot;') + '">' + t('ban_unban') + '</button></td>' +
       '</tr>';
     }).join('');
     rows.querySelectorAll('[data-unban]').forEach((btn) => {
@@ -2079,22 +2241,22 @@ func renderUIPage(pluginID string) []byte {
         empty.style.display = 'block';
         empty.textContent = hasManagementKey()
           ? ((banState.filter && banState.filter !== 'all')
-            ? ('当前分类「' + banFilterLabel(banState.filter) + '」没有账号')
-            : '当前没有自动禁用中的账号')
-          : '请输入 CPA Management Key 后加载自动禁用状态';
+            ? (t('ban_empty_filter_prefix') + banFilterLabel(banState.filter) + t('ban_empty_filter_suffix'))
+            : t('ban_empty'))
+          : t('ban_need_key_load');
       }
     }
     if (pager) {
       pager.innerHTML =
-        '<div class="pager-meta pager-meta-row">共 ' + list.length + ' 个' +
+        '<div class="pager-meta pager-meta-row">' + t('pager_total_prefix') + list.length + t('pager_total_suffix') +
         ((banState.filter && banState.filter !== 'all') ? ('（' + banFilterLabel(banState.filter) + '）') : '') +
-        ' · 第 ' + banState.page + ' / ' + pages + ' 页' +
-        ' · 每页 <select id="banPageSize">' +
+        t('pager_page_mid') + banState.page + t('pager_page_of') + pages + t('pager_page_suffix') +
+        t('per_page') + '<select id="banPageSize">' +
         [20,50,100].map((n) => '<option value="' + n + '"' + (size===n?' selected':'') + '>' + n + '</option>').join('') +
         '</select></div>' +
         '<div style="display:flex;gap:8px;align-items:center">' +
-        '<button id="banPrev"' + (banState.page<=1?' disabled':'') + '>上一页</button>' +
-        '<button id="banNext"' + (banState.page>=pages?' disabled':'') + '>下一页</button></div>';
+        '<button id="banPrev"' + (banState.page<=1?' disabled':'') + '>' + t('prev') + '</button>' +
+        '<button id="banNext"' + (banState.page>=pages?' disabled':'') + '>' + t('next') + '</button></div>';
       const banPageSizeEl = document.getElementById('banPageSize');
       if (banPageSizeEl) {
         banPageSizeEl.onchange = () => {
@@ -2120,7 +2282,7 @@ async function loadBans() {
       const toggle = document.getElementById('banEnabledToggle');
       if (toggle) { toggle.disabled = true; toggle.checked = false; }
       const pill = document.getElementById('banEnabledPill');
-      if (pill) { pill.textContent = '未加载'; pill.className = 'status-pill off'; }
+      if (pill) { pill.textContent = t('ban_not_loaded'); pill.className = 'status-pill off'; }
       renderBanPage();
       return;
     }
@@ -2155,7 +2317,7 @@ async function loadBans() {
       }
       const pill = document.getElementById('banEnabledPill');
       if (pill) {
-        pill.textContent = on ? '运行中' : '已关闭';
+        pill.textContent = on ? t('ban_running') : t('ban_off');
         pill.className = 'status-pill ' + (on ? 'on' : 'off');
       }
       renderBanPage();
@@ -2169,18 +2331,18 @@ async function loadBans() {
     if (!id || unbanOne._busy) return;
     unbanOne._busy = true;
     try {
-      const ok = await confirmDialog('确认解禁', '将重新启用账号：\n' + id);
+      const ok = await confirmDialog(t('unban_confirm_title'), t('unban_confirm_body_prefix') + id);
       if (!ok) return;
       const raw = await api('/unban', { method: 'POST', body: JSON.stringify({ auth_id: id }) });
       const data = (raw && raw.result && typeof raw.result === 'object') ? raw.result : (raw || {});
-      if (data && data.ok === false) throw new Error(data.error || '解禁失败');
+      if (data && data.ok === false) throw new Error(data.error || t('unban_failed'));
       const msg = data && data.missing
-        ? '账号已不在 CPA 认证列表中，已清除本插件禁用记录'
-        : '已解禁并重新启用';
-      await confirmDialog('解禁成功', msg, { showCancel: false });
+        ? t('unban_missing')
+        : t('unban_success_msg');
+      await confirmDialog(t('unban_success_title'), msg, { showCancel: false });
       await loadBans();
     } catch (e) {
-      try { await confirmDialog('解禁失败', String(e.message || e), { showCancel: false }); } catch (_) {}
+      try { await confirmDialog(t('unban_failed'), String(e.message || e), { showCancel: false }); } catch (_) {}
       const errEl = document.getElementById('banError');
       if (errEl) errEl.textContent = String(e.message || e);
     } finally {
@@ -2196,28 +2358,28 @@ async function loadBans() {
     try {
       const list = filteredBans();
       if (!list.length) {
-        await confirmDialog('提示', '当前分类没有可解禁账号', { showCancel: false });
+        await confirmDialog(t('notice_title'), t('unban_filter_empty'), { showCancel: false });
         return;
       }
       const label = banFilterLabel(banState.filter || 'all');
       const ok = await confirmDialog(
-        '确认解禁当前分类',
-        '将解禁「' + label + '」下的 ' + list.length + ' 个账号。\n后台异步执行，可用停止按钮中止。'
+        t('unban_filter_confirm_title'),
+        t('unban_filter_confirm_body_prefix') + label + t('unban_filter_confirm_body_mid') + list.length + t('unban_filter_confirm_body_suffix')
       );
       if (!ok) return;
-      if (btn) { btn.disabled = true; btn.textContent = '解禁中…'; }
+      if (btn) { btn.disabled = true; btn.textContent = t('unban_in_progress'); }
       const ids = list.map((b) => String(b.auth_id || '').trim()).filter(Boolean);
       const body = (banState.filter && banState.filter !== 'all')
         ? { category: banState.filter, auth_ids: ids }
         : { auth_ids: ids };
       const data = await api('/unban-all', { method: 'POST', body: JSON.stringify(body) });
-      if (data && data.ok === false) throw new Error(data.error || '启动解禁失败');
-      showOk('分类解禁已在后台执行：共 ' + ids.length + ' 个');
+      if (data && data.ok === false) throw new Error(data.error || t('unban_start_failed'));
+      showOk(t('unban_filter_started_prefix') + ids.length + t('unban_filter_started_suffix'));
       startPolling();
       await refresh({ light: true });
       await loadBans();
     } catch (e) {
-      try { await confirmDialog('解禁失败', String(e.message || e), { showCancel: false }); } catch (_) {}
+      try { await confirmDialog(t('unban_failed'), String(e.message || e), { showCancel: false }); } catch (_) {}
       if (errEl) errEl.textContent = String(e.message || e);
     } finally {
       unbanCurrentFilter._busy = false;
@@ -2225,17 +2387,17 @@ async function loadBans() {
     }
   }
   async function unbanAll() {
-    const ok = await confirmDialog('确认全部解禁', '将尝试解禁当前禁用池中的全部账号。\n后台异步执行，可用停止按钮中止。');
+    const ok = await confirmDialog(t('unban_all_confirm_title'), t('unban_all_confirm_body'));
     if (!ok) return;
     try {
       const data = await api('/unban-all', { method: 'POST', body: '{}' });
-      if (data && data.ok === false) throw new Error(data.error || '启动解禁失败');
-      showOk('全部解禁已在后台执行');
+      if (data && data.ok === false) throw new Error(data.error || t('unban_start_failed'));
+      showOk(t('unban_all_started'));
       startPolling();
       await refresh({ light: true });
       await loadBans();
     } catch (e) {
-      await confirmDialog('提示', String(e.message || e));
+      await confirmDialog(t('notice_title'), String(e.message || e));
     }
   }
 async function setAutobanEnabled(on) {
@@ -2249,11 +2411,11 @@ async function setAutobanEnabled(on) {
       if (toggle) toggle.checked = enabled;
       const pill = document.getElementById('banEnabledPill');
       if (pill) {
-        pill.textContent = enabled ? '运行中' : '已关闭';
+        pill.textContent = enabled ? t('ban_running') : t('ban_off');
         pill.className = 'status-pill ' + (enabled ? 'on' : 'off');
       }
       const label = document.getElementById('banEnabledLabel');
-      if (label) label.textContent = enabled ? '运行中' : '已关闭';
+      if (label) label.textContent = enabled ? t('ban_running') : t('ban_off');
     } catch (e) {
       if (errEl) errEl.textContent = String(e.message || e);
       if (toggle) toggle.checked = !on;

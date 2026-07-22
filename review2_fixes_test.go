@@ -49,7 +49,6 @@ func TestApplyPersistResultLockedIgnoresOlderSuccess(t *testing.T) {
 	}
 }
 
-
 // --- 2) enable/delete clear autoban pool ---
 
 func withCPAManagement(t *testing.T, h http.HandlerFunc) {
@@ -315,6 +314,7 @@ func TestDisableDoesNotClearBan(t *testing.T) {
 		t.Fatal("disable must not delete ban")
 	}
 }
+
 // --- 3) unban persist_error ---
 
 func TestUnbanJobReportsPersistError(t *testing.T) {
@@ -426,8 +426,11 @@ func TestUIPageThemeUsesCSSVarsForSelectAndHints(t *testing.T) {
 func TestUIManualManagementKeyShowsLoadedHint(t *testing.T) {
 	page := string(renderUIPage(pluginName))
 	if !strings.Contains(page, `} else if (hasManagementKey()) {
-      hint.textContent = '已使用手动填写的 Key';`) {
+      hint.textContent = t('key_manual');`) {
 		t.Fatal("manual Management Key still falls through to the missing-key hint")
+	}
+	if !strings.Contains(page, `key_manual:`) {
+		t.Fatal("key_manual i18n entry missing")
 	}
 }
 

@@ -200,24 +200,24 @@ func TestProbeTimeoutSentinelsAreLanguageAgnostic(t *testing.T) {
 	}
 }
 
-func TestPluginVersionIs014(t *testing.T) {
-	if pluginVersion != "0.1.14" {
-		t.Fatalf("pluginVersion = %q, want 0.1.14", pluginVersion)
+func TestPluginVersionIs015(t *testing.T) {
+	if pluginVersion != "0.1.15" {
+		t.Fatalf("pluginVersion = %q, want 0.1.15", pluginVersion)
 	}
 	meta := pluginRegistration()
-	if meta.Metadata.Version != "0.1.14" {
+	if meta.Metadata.Version != "0.1.15" {
 		t.Fatalf("meta.Version = %q", meta.Metadata.Version)
 	}
 	readme := mustReadRepoFile(t, "README.md")
 	readmeEN := mustReadRepoFile(t, "README.en.md")
-	if !strings.Contains(readme, "0.1.14") {
-		t.Fatal("README.md missing 0.1.14")
+	if !strings.Contains(readme, "0.1.15") {
+		t.Fatal("README.md missing 0.1.15")
 	}
-	if !strings.Contains(readmeEN, "0.1.14") {
-		t.Fatal("README.en.md missing 0.1.14")
+	if !strings.Contains(readmeEN, "0.1.15") {
+		t.Fatal("README.en.md missing 0.1.15")
 	}
-	if strings.Contains(readme, "0.1.13") || strings.Contains(readmeEN, "0.1.13") {
-		t.Fatal("README still mentions 0.1.13")
+	if strings.Contains(readme, "0.1.14") || strings.Contains(readmeEN, "0.1.14") {
+		t.Fatal("README still mentions 0.1.14")
 	}
 }
 

@@ -9,7 +9,7 @@ on:
       tag:
         description: Existing release tag to build or repair
         required: true
-        default: v0.1.8
+        default: v0.1.15
 
 permissions:
   contents: write

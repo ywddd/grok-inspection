@@ -12,7 +12,7 @@ This is a **pure vibe-coding** plugin: it works and is practical, but the code m
 - **If you prefer not to rely on vibe-coded plugins**, use **CPA Manager Plus** (or a similar management panel) for account inspection / ops instead.
 - This plugin is a lightweight, **optional** Grok/xAI inspection add-on — not an official reference implementation.
 
-Version: `0.1.14` · Menu: **Grok Account Inspection**
+Version: `0.1.15` · Menu: **Grok Account Inspection**
 
 ## Language
 The management UI is **bilingual and toggleable**:

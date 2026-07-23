@@ -129,6 +129,7 @@ func cliproxyPluginShutdown() {
 	stopInspectionScheduleLoop()
 	stopBanRestoreLoop()
 	stopBanDisposeWorkers()
+	stopBanPersistWorker()
 	engine.shutdown()
 	C.clear_host_api()
 }

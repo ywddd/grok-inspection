@@ -30,6 +30,9 @@ type persistedSnapshot struct {
 var (
 	storeMu           sync.Mutex
 	storePathOverride string
+	// testStorePathDefault is set by TestMain so clearing override never falls
+	// back to the repo-relative data/grok-inspection path during tests.
+	testStorePathDefault string
 
 	// Serialize disk IO and coalesce concurrent flushes so only the newest
 	// snapshot is kept when persistLocked/stop/finish race.
@@ -52,21 +55,6 @@ func storeFilePath() string {
 	}
 	// Prefer a stable data dir under the process working directory (CPA cwd).
 	return filepath.Join("data", "grok-inspection", "results.json")
-}
-
-func setStoreFilePathForTest(path string) {
-	storeMu.Lock()
-	defer storeMu.Unlock()
-	storePathOverride = path
-}
-
-func resetStoreIOForTest() {
-	storeIOMu.Lock()
-	defer storeIOMu.Unlock()
-	storePending = nil
-	storeSaveGen = 0
-	storeWrittenGen = 0
-	storeWriting = false
 }
 
 func loadPersistedSnapshot() (persistedSnapshot, error) {

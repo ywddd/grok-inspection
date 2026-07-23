@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"net/http"
@@ -14,12 +14,6 @@ var managementCredentialCache = struct {
 	mu  sync.RWMutex
 	key string
 }{}
-
-func clearManagementCredentialCacheForTest() {
-	managementCredentialCache.mu.Lock()
-	managementCredentialCache.key = ""
-	managementCredentialCache.mu.Unlock()
-}
 
 func rememberManagementCredential(key string) {
 	key = strings.TrimSpace(key)

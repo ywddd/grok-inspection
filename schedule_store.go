@@ -4,7 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 )
+
+// scheduleIOMu serializes all schedule.json reads/writes so concurrent POST and
+// runtime status flushes cannot clobber each other on Windows/SMB.
+var scheduleIOMu sync.Mutex
 
 func scheduleFilePath() string {
 	return filepath.Join(filepath.Dir(storeFilePath()), "schedule.json")
@@ -14,6 +19,8 @@ func scheduleFilePath() string {
 // POST /schedule must only report success after this returns nil.
 func saveInspectionScheduleSync(cfg persistedInspectionSchedule) error {
 	cfg = normalizePersistedInspectionSchedule(cfg)
+	scheduleIOMu.Lock()
+	defer scheduleIOMu.Unlock()
 	path := scheduleFilePath()
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -39,35 +46,51 @@ func saveInspectionScheduleSync(cfg persistedInspectionSchedule) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempName, path)
+	return replaceFileWithRetry(tempName, path)
+}
+
+func loadScheduleJSONUnlocked() (persistedInspectionSchedule, error) {
+	path := scheduleFilePath()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return persistedInspectionSchedule{}, err
+	}
+	var cfg persistedInspectionSchedule
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		return persistedInspectionSchedule{}, err
+	}
+	return normalizePersistedInspectionSchedule(cfg), nil
 }
 
 // loadInspectionScheduleFromDisk prefers schedule.json; falls back to results.json
 // schedule field for migration from older installs.
 func loadInspectionScheduleFromDisk() (persistedInspectionSchedule, error) {
-	path := scheduleFilePath()
-	raw, err := os.ReadFile(path)
+	scheduleIOMu.Lock()
+	cfg, err := loadScheduleJSONUnlocked()
+	scheduleIOMu.Unlock()
 	if err == nil {
-		var cfg persistedInspectionSchedule
-		if err := json.Unmarshal(raw, &cfg); err != nil {
-			return persistedInspectionSchedule{}, err
+		return cfg, nil
+	}
+	if err != nil && !os.IsNotExist(err) {
+		// Corrupt schedule.json: still try migration, but surface if both fail.
+		schedErr := err
+		snap, errSnap := loadPersistedSnapshot()
+		if errSnap == nil {
+			return normalizePersistedInspectionSchedule(snap.Schedule), nil
 		}
-		return normalizePersistedInspectionSchedule(cfg), nil
+		return persistedInspectionSchedule{}, schedErr
 	}
-	if !os.IsNotExist(err) {
-		return persistedInspectionSchedule{}, err
-	}
-	// Migration: read schedule embedded in results.json.
+	// Missing schedule.json: migrate from results.json when present.
 	snap, errSnap := loadPersistedSnapshot()
 	if errSnap != nil {
 		if os.IsNotExist(errSnap) {
 			return defaultInspectionSchedule(), nil
 		}
-		// results may be missing on first boot.
 		if _, statErr := os.Stat(storeFilePath()); os.IsNotExist(statErr) {
 			return defaultInspectionSchedule(), nil
 		}
-		return persistedInspectionSchedule{}, errSnap
+		// results unreadable — schedule still defaults so plugin can boot
+		return defaultInspectionSchedule(), nil
 	}
 	return normalizePersistedInspectionSchedule(snap.Schedule), nil
 }

@@ -1,11 +1,29 @@
-﻿package main
+package main
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
 )
+
+// schedulePersistError is returned when schedule.json could not be written.
+// Callers must not treat message text as a protocol.
+type schedulePersistError struct{ err error }
+
+func (e *schedulePersistError) Error() string {
+	if e == nil || e.err == nil {
+		return "schedule persist failed"
+	}
+	return e.err.Error()
+}
+func (e *schedulePersistError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
 
 const (
 	defaultInspectionScheduleIntervalMinutes = 60
@@ -221,16 +239,15 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 		cfg.LastStatus = "disabled"
 	}
 	cfg.LastError = ""
-	// Apply optimistically, then require durable schedule.json before success.
-	engine.schedule = cfg
+	// Do not publish to the run loop until schedule.json is durable.
 	engine.mu.Unlock()
 
 	if err := saveInspectionScheduleSync(cfg); err != nil {
-		engine.mu.Lock()
-		engine.schedule = prev
-		engine.mu.Unlock()
-		return prev, err
+		return prev, &schedulePersistError{err: err}
 	}
+	engine.mu.Lock()
+	engine.schedule = cfg
+	engine.mu.Unlock()
 	wakeInspectionScheduleLoop()
 	return cfg, nil
 }
@@ -561,5 +578,7 @@ func setInspectionScheduleRuntimeStatus(status, lastError string, started time.T
 	}
 	engine.schedule = cfg
 	engine.mu.Unlock()
-	_ = saveInspectionScheduleSync(cfg)
+	if err := saveInspectionScheduleSync(cfg); err != nil {
+		slog.Warn("grok-inspection: failed to persist schedule runtime status", "error", err)
+	}
 }

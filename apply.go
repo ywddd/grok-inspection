@@ -89,37 +89,52 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 	if errMarshal != nil {
 		return errMarshal
 	}
-	if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, headers); errPatch != nil {
-		return errPatch
-	}
-	engine.mu.Lock()
-	for i := range engine.results {
-		item := &engine.results[i]
-		if resultMatchesTarget(*item, target, name) {
-			item.Disabled = disabled
-			// Recompute suggested action from classification + current disabled state.
-			// Force-enable on quota/permission must become "disable" again, not keep stale "keep".
-			item.Action = recommendAction(item.Classification, item.Disabled)
+	// Serialize per-account network mutation + local ban commit against Usage/restore.
+	authKey := firstNonEmpty(fileName, name)
+	return withAuthOp(authKey, func() error {
+		// Snapshot matching ban revisions before enable network call (CAS later).
+		var pre []banEntry
+		if !disabled {
+			pre = listBansMatchingTarget(activeStore, target, name)
 		}
-	}
-	engine.bumpResultsLocked()
-	banStateChanged := false
-	if disabled {
-		banStateChanged = syncInspectionBan(activeStore, target, name, time.Now(), banErrorCode)
-	} else {
-		// Inspection force-enable must drop autoban pool row so both pages stay aligned.
-		banStateChanged = clearBansMatchingTarget(target, name) > 0
-	}
-	if persist {
-		engine.persistLocked()
-	}
-	engine.mu.Unlock()
-	if banStateChanged && persist {
-		if err := saveActiveStoreErr(); err != nil {
-			return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
+		if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, headers); errPatch != nil {
+			return errPatch
 		}
-	}
-	return nil
+		engine.mu.Lock()
+		for i := range engine.results {
+			item := &engine.results[i]
+			if resultMatchesTarget(*item, target, name) {
+				item.Disabled = disabled
+				item.Action = recommendAction(item.Classification, item.Disabled)
+			}
+		}
+		engine.bumpResultsLocked()
+		banStateChanged := false
+		if disabled {
+			banStateChanged = syncInspectionBan(activeStore, target, name, time.Now(), banErrorCode)
+		} else {
+			// CAS clear only pre-enable revisions; newer bans stay and re-disable CPA.
+			changed, errCAS := clearBansMatchingTargetCAS(activeStore, target, name, pre)
+			banStateChanged = changed > 0
+			if errCAS != nil {
+				engine.mu.Unlock()
+				if persist {
+					_ = saveActiveStoreErr()
+				}
+				return errCAS
+			}
+		}
+		if persist {
+			engine.persistLocked()
+		}
+		engine.mu.Unlock()
+		if banStateChanged && persist {
+			if err := saveActiveStoreErr(); err != nil {
+				return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // syncManualInspectionBan records an inspection-triggered manual disable in
@@ -240,6 +255,94 @@ func clearBansMatchingTargetInStore(store *banStore, target *pluginapi.HostAuthF
 	return removed
 }
 
+// listBansMatchingTarget returns current ban entries matching the account aliases.
+func listBansMatchingTarget(store *banStore, target *pluginapi.HostAuthFileEntry, name string) []banEntry {
+	if store == nil {
+		return nil
+	}
+	aliases := banAliases(target, name)
+	if len(aliases) == 0 {
+		return nil
+	}
+	var out []banEntry
+	for _, entry := range store.All() {
+		if banIDMatchesAliases(entry.AuthID, aliases) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func banAliases(target *pluginapi.HostAuthFileEntry, name string) map[string]struct{} {
+	aliases := map[string]struct{}{}
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			aliases[v] = struct{}{}
+		}
+	}
+	add(name)
+	if target != nil {
+		add(target.AuthIndex)
+		add(target.Name)
+		add(target.ID)
+		add(target.Email)
+		add(target.Label)
+	}
+	return aliases
+}
+
+func banIDMatchesAliases(authID string, aliases map[string]struct{}) bool {
+	id := strings.TrimSpace(authID)
+	if id == "" {
+		return false
+	}
+	if _, ok := aliases[id]; ok {
+		return true
+	}
+	base := id
+	if i := strings.LastIndexAny(id, `/\`); i >= 0 {
+		base = id[i+1:]
+	}
+	_, ok := aliases[base]
+	return ok
+}
+
+// clearBansMatchingTargetCAS deletes only bans whose revision still matches the
+// pre-mutation snapshot. Newer revisions are kept and re-disabled in CPA.
+func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileEntry, name string, pre []banEntry) (int, error) {
+	if store == nil {
+		return 0, nil
+	}
+	preByID := map[string]uint64{}
+	for _, e := range pre {
+		preByID[e.AuthID] = e.Revision
+	}
+	removed := 0
+	var firstErr error
+	for _, entry := range store.All() {
+		if !banIDMatchesAliases(entry.AuthID, banAliases(target, name)) {
+			continue
+		}
+		if oldRev, ok := preByID[entry.AuthID]; ok && entry.Revision == oldRev {
+			if store.DeleteIf(entry.AuthID, oldRev) {
+				removed++
+			}
+			continue
+		}
+		// Newer ban landed during enable: re-disable and keep local state.
+		if err := disableAuthInCPA(entry.AuthID); err != nil {
+			store.UpdateCpaSyncState(entry.AuthID, false, sanitizeCPASyncError(err))
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			store.UpdateCpaSyncState(entry.AuthID, true, "")
+		}
+	}
+	return removed, firstErr
+}
+
 func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntry, name string) {
 	kept := make([]accountResult, 0, len(e.results))
 	for _, item := range e.results {
@@ -265,19 +368,21 @@ func deleteAuthFile(name string, password string, headers http.Header, persist b
 	if errTarget != nil {
 		// Idempotent: already gone counts as success for delete recommendations.
 		if strings.Contains(errTarget.Error(), "auth not found") {
-			engine.mu.Lock()
-			engine.removeResultLocked(nil, name)
-			bansRemoved := clearBansMatchingTarget(nil, name)
-			if persist {
-				engine.persistLocked()
-			}
-			engine.mu.Unlock()
-			if bansRemoved > 0 && persist {
-				if err := saveActiveStoreErr(); err != nil {
-					return fmt.Errorf("deleted locally but failed to persist ban state: %w", err)
+			return withAuthOp(name, func() error {
+				engine.mu.Lock()
+				engine.removeResultLocked(nil, name)
+				bansRemoved := clearBansMatchingTarget(nil, name)
+				if persist {
+					engine.persistLocked()
 				}
-			}
-			return nil
+				engine.mu.Unlock()
+				if bansRemoved > 0 && persist {
+					if err := saveActiveStoreErr(); err != nil {
+						return fmt.Errorf("deleted locally but failed to persist ban state: %w", err)
+					}
+				}
+				return nil
+			})
 		}
 		return errTarget
 	}
@@ -285,41 +390,44 @@ func deleteAuthFile(name string, password string, headers http.Header, persist b
 	if fileName == "" {
 		return fmt.Errorf("auth file name missing for %s", name)
 	}
-	path := "/v0/management/auth-files?name=" + url.QueryEscape(fileName)
-	if _, _, errDelete := callCPAManagementWithAuth(http.MethodDelete, path, nil, password, headers); errDelete != nil {
-		// Concurrent deletes / already-removed files often surface as 404 — treat as success.
-		msg := errDelete.Error()
-		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
-			engine.mu.Lock()
-			engine.removeResultLocked(target, name)
-			bansRemoved := clearBansMatchingTarget(target, name)
-			if persist {
-				engine.persistLocked()
-			}
-			engine.mu.Unlock()
-			if bansRemoved > 0 && persist {
-				if err := saveActiveStoreErr(); err != nil {
-					return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+	return withAuthOp(fileName, func() error {
+		path := "/v0/management/auth-files?name=" + url.QueryEscape(fileName)
+		if _, _, errDelete := callCPAManagementWithAuth(http.MethodDelete, path, nil, password, headers); errDelete != nil {
+			// Concurrent deletes / already-removed files often surface as 404 — treat as success.
+			msg := errDelete.Error()
+			if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
+				engine.mu.Lock()
+				engine.removeResultLocked(target, name)
+				bansRemoved := clearBansMatchingTarget(target, name)
+				if persist {
+					engine.persistLocked()
 				}
+				engine.mu.Unlock()
+				if bansRemoved > 0 && persist {
+					if err := saveActiveStoreErr(); err != nil {
+						return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+					}
+				}
+				return nil
 			}
-			return nil
+			// Remote failure: keep local results/bans.
+			return errDelete
 		}
-		return errDelete
-	}
-	// Trust a successful DELETE; do not re-list all CPA auth files to verify.
-	engine.mu.Lock()
-	engine.removeResultLocked(target, name)
-	bansRemoved := clearBansMatchingTarget(target, name)
-	if persist {
-		engine.persistLocked()
-	}
-	engine.mu.Unlock()
-	if bansRemoved > 0 && persist {
-		if err := saveActiveStoreErr(); err != nil {
-			return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+		// Trust a successful DELETE; do not re-list all CPA auth files to verify.
+		engine.mu.Lock()
+		engine.removeResultLocked(target, name)
+		bansRemoved := clearBansMatchingTarget(target, name)
+		if persist {
+			engine.persistLocked()
 		}
-	}
-	return nil
+		engine.mu.Unlock()
+		if bansRemoved > 0 && persist {
+			if err := saveActiveStoreErr(); err != nil {
+				return fmt.Errorf("deleted in CPA but failed to persist ban state: %w", err)
+			}
+		}
+		return nil
+	})
 }
 
 // resolveDeleteFileName picks the CPA auth file name for management DELETE.
@@ -339,6 +447,9 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		fileName string
 	}
 	mappedItems := make([]mapped, 0, len(items))
+	// Duplicate result rows sharing a physical file name. Cleared only after a
+	// successful remote DELETE for that name — never when remote fails.
+	dupAliases := map[string][]string{}
 	names := make([]string, 0, len(items))
 	failures := make([]string, 0)
 	seenName := map[string]struct{}{}
@@ -348,14 +459,9 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 			failures = append(failures, item.Name+": auth file name missing")
 			continue
 		}
-		// Skip duplicate physical names in the same batch (same file, multiple result rows).
+		alias := firstNonEmpty(item.AuthIndex, item.FileName, item.Name, item.Email)
 		if _, ok := seenName[fileName]; ok {
-			// Still drop matching local rows for this identity.
-			alias := firstNonEmpty(item.AuthIndex, item.FileName, item.Name, item.Email)
-			engine.mu.Lock()
-			engine.removeResultLocked(nil, alias)
-			_ = clearBansMatchingTarget(nil, alias)
-			engine.mu.Unlock()
+			dupAliases[fileName] = append(dupAliases[fileName], alias)
 			continue
 		}
 		seenName[fileName] = struct{}{}
@@ -379,21 +485,16 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 
 	status, raw, errDelete := callCPAManagementWithAuth(http.MethodDelete, "/v0/management/auth-files", body, password, headers)
 	if errDelete != nil {
-		// Whole batch failed (network / hard error). Mark all remaining names failed.
 		msg := errDelete.Error()
-		// If everything was already gone, treat as success.
+		// Already gone: treat as success and clear local. Other errors keep local state.
 		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
-			engine.mu.Lock()
 			for _, m := range mappedItems {
-				alias := firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email)
-				engine.removeResultLocked(nil, alias)
-				_ = clearBansMatchingTarget(nil, alias)
-				_ = clearBansMatchingTarget(nil, m.fileName)
+				clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false)
 			}
 			if persist {
-				engine.persistLocked()
+				engine.persist()
+				_ = saveActiveStoreErr()
 			}
-			engine.mu.Unlock()
 			return failures
 		}
 		for _, m := range mappedItems {
@@ -402,7 +503,6 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		return failures
 	}
 
-	// Parse optional partial failure payload (HTTP 207 Multi-Status).
 	failedNames := map[string]string{}
 	if status == http.StatusMultiStatus || len(raw) > 0 {
 		var payload struct {
@@ -428,23 +528,65 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		}
 	}
 
-	engine.mu.Lock()
+	anyCleared := false
 	for _, m := range mappedItems {
 		if errText, ok := failedNames[m.fileName]; ok {
 			failures = append(failures, m.item.Name+": "+errText)
 			continue
 		}
-		alias := firstNonEmpty(m.item.AuthIndex, m.fileName, m.item.Name, m.item.Email)
-		engine.removeResultLocked(nil, alias)
-		_ = clearBansMatchingTarget(nil, alias)
-		_ = clearBansMatchingTarget(nil, m.fileName)
+		if clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false) {
+			anyCleared = true
+		}
 	}
 	if persist {
-		engine.persistLocked()
+		engine.persist()
+		if anyCleared {
+			_ = saveActiveStoreErr()
+		}
 	}
-	engine.mu.Unlock()
 	_ = status
 	return failures
+}
+
+// clearOneDeletedAuthLocal removes local results/bans for one successfully deleted
+// auth file (and any duplicate aliases that pointed at the same physical name).
+// Serialized per fileName so Usage/restore cannot interleave inconsistently.
+func clearOneDeletedAuthLocal(item accountResult, fileName string, dupAliases []string, persist bool) bool {
+	fileName = strings.TrimSpace(fileName)
+	if fileName == "" {
+		return false
+	}
+	changed := false
+	_ = withAuthOp(fileName, func() error {
+		engine.mu.Lock()
+		alias := firstNonEmpty(item.AuthIndex, fileName, item.Name, item.Email)
+		engine.removeResultLocked(nil, alias)
+		if clearBansMatchingTarget(nil, alias) > 0 {
+			changed = true
+		}
+		if clearBansMatchingTarget(nil, fileName) > 0 {
+			changed = true
+		}
+		for _, a := range dupAliases {
+			a = strings.TrimSpace(a)
+			if a == "" {
+				continue
+			}
+			engine.removeResultLocked(nil, a)
+			if clearBansMatchingTarget(nil, a) > 0 {
+				changed = true
+			}
+		}
+		if persist {
+			engine.persistLocked()
+		}
+		engine.mu.Unlock()
+		if changed && persist {
+			_ = saveActiveStoreErr()
+		}
+		return nil
+	})
+	return changed
 }
 
 func normalizeForceAction(value string) (string, error) {

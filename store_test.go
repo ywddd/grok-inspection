@@ -2,8 +2,8 @@ package main
 
 import (
 	"os"
-	"sync"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 

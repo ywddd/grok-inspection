@@ -50,7 +50,6 @@ func waitHostCalls(timeout time.Duration) {
 	}
 }
 
-
 // shutdownWaitLogger is overridable in tests for diagnostic assertions.
 var shutdownWaitLogger = func(msg string, args ...any) {
 	slog.Warn(msg, args...)

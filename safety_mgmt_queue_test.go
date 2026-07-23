@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"crypto/tls"
@@ -108,7 +108,7 @@ func TestClassifyBareCloudflare403IsNotPermissionDenied(t *testing.T) {
 func TestClassifyAccountLevelPermissionDeniedStillWorks(t *testing.T) {
 	got := classifyProbe(classifyInput{
 		Lang: LangZH, ChatStatus: 403,
-		ChatCode: "permission-denied",
+		ChatCode:  "permission-denied",
 		ChatError: "Access to the chat endpoint is denied. Please ensure you're using the correct credentials.",
 	})
 	if got.Classification != "permission_denied" || got.Action != "disable" {
@@ -802,13 +802,13 @@ func TestAbsoluteResetTimeAcceptsSecondsAndMillis(t *testing.T) {
 	ms := now.Add(3 * time.Hour).UnixMilli()
 	hSec := http.Header{}
 	hSec.Set("X-RateLimit-Reset-At", fmt.Sprintf("%d", sec))
-	got, ok := absoluteResetTime(hSec)
+	got, ok := absoluteResetTime(hSec, now)
 	if !ok || got.Unix() != sec {
 		t.Fatalf("seconds: ok=%v got=%v want=%d", ok, got, sec)
 	}
 	hMs := http.Header{}
 	hMs.Set("X-RateLimit-Reset-At", fmt.Sprintf("%d", ms))
-	got, ok = absoluteResetTime(hMs)
+	got, ok = absoluteResetTime(hMs, now)
 	if !ok || got.UnixMilli() != ms {
 		t.Fatalf("millis: ok=%v got=%v want_ms=%d", ok, got, ms)
 	}
@@ -820,7 +820,7 @@ func TestAbsoluteResetTimeRejectsAbsurdValues(t *testing.T) {
 	// 10-digit seconds far past
 	hPast := http.Header{}
 	hPast.Set("X-RateLimit-Reset-At", "100")
-	if _, ok := absoluteResetTime(hPast); ok {
+	if _, ok := absoluteResetTime(hPast, now); ok {
 		t.Fatal("past unix reset must be rejected")
 	}
 	resetAt, src, ok2 := resolveBanWindow(429, exhaustedErrorCode, hPast, now, defaultPluginConfig())
@@ -830,7 +830,7 @@ func TestAbsoluteResetTimeRejectsAbsurdValues(t *testing.T) {
 	// Absurd far-future ms (year ~5000+)
 	hFar := http.Header{}
 	hFar.Set("X-RateLimit-Reset-At", "99999999999999")
-	if got, ok := absoluteResetTime(hFar); ok {
+	if got, ok := absoluteResetTime(hFar, now); ok {
 		t.Fatalf("absurd far future accepted: %v", got)
 	}
 }
@@ -860,8 +860,11 @@ func TestDetect401KeepsDiagnosticCodeButUnauthorizedCategory(t *testing.T) {
 	if !ok {
 		t.Fatal("401 must ban")
 	}
-	if entry.ErrorCode != "authentication_error" {
-		t.Fatalf("keep diagnostic error_code, got %q", entry.ErrorCode)
+	if entry.ErrorCode != unauthorizedErrorCode {
+		t.Fatalf("visible error_code must be unauthorized, got %q", entry.ErrorCode)
+	}
+	if entry.ErrorCodeDiag != "authentication_error" {
+		t.Fatalf("diagnostic code = %q", entry.ErrorCodeDiag)
 	}
 	if banCategoryOf(entry.ErrorCode) != "unauthorized" {
 		t.Fatalf("category = %s", banCategoryOf(entry.ErrorCode))
@@ -898,7 +901,7 @@ func TestEngineShutdownSourceStopsBanDisposeWorkers(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("shutdown missing")
 	}
-	chunk := src[idx:idx+400]
+	chunk := src[idx : idx+400]
 	if !strings.Contains(chunk, "stopBanDisposeWorkers()") {
 		t.Fatalf("engine.shutdown must stop ban dispose workers: %q", chunk)
 	}
@@ -910,4 +913,3 @@ func TestEngineShutdownSourceStopsBanDisposeWorkers(t *testing.T) {
 		t.Fatal("cliproxyPluginShutdown must stop ban dispose workers")
 	}
 }
-

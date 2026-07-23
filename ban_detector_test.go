@@ -105,14 +105,17 @@ func TestDetectGrokUnauthorized401(t *testing.T) {
 		t.Fatalf("reset at = %s, want far-future manual unban", entry.ResetAt)
 	}
 
-	// Prefer body code when present.
+	// Body code kept as optional diagnostic; visible error_code stays unauthorized.
 	record.Failure.Body = `{"code":"authentication_error","error":"token expired"}`
 	entry, ok = detectBan(record, defaultPluginConfig(), now)
 	if !ok {
 		t.Fatal("detectBan() did not match Grok 401 with body code")
 	}
-	if entry.ErrorCode != "authentication_error" {
-		t.Fatalf("error code = %q", entry.ErrorCode)
+	if entry.ErrorCode != unauthorizedErrorCode {
+		t.Fatalf("visible error code = %q", entry.ErrorCode)
+	}
+	if entry.ErrorCodeDiag != "authentication_error" {
+		t.Fatalf("diag error code = %q", entry.ErrorCodeDiag)
 	}
 }
 

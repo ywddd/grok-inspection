@@ -270,20 +270,25 @@ func slowRetryWorkers(workers int) int {
 }
 
 func (e *inspectionEngine) loadFromDisk() {
+	// Load schedule.json independently so a missing/corrupt results.json cannot
+	// prevent schedule settings from applying on restart.
+	sched, schedErr := loadInspectionScheduleFromDisk()
 	snap, err := loadPersistedSnapshot()
-	if err != nil {
-		return
-	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.running || e.applying {
 		return
 	}
-	e.results = append([]accountResult(nil), snap.Results...)
-	// Prefer small schedule.json; fall back to results.json schedule (migration).
-	if sched, errSched := loadInspectionScheduleFromDisk(); errSched == nil {
+	if schedErr == nil {
 		e.schedule = sched
-	} else {
+	}
+	if err != nil {
+		// results missing/corrupt: keep schedule if loaded; leave results empty.
+		return
+	}
+	e.results = append([]accountResult(nil), snap.Results...)
+	if schedErr != nil {
 		e.schedule = normalizePersistedInspectionSchedule(snap.Schedule)
 	}
 	e.bumpResultsLocked()
@@ -709,6 +714,7 @@ func (e *inspectionEngine) abortRunLocked() {
 func (e *inspectionEngine) shutdown() {
 	// Stop background CPA dispose workers before waiting on other lifecycle gates.
 	stopBanDisposeWorkers()
+	stopBanPersistWorker()
 	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true

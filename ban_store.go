@@ -43,8 +43,14 @@ func (s *banStore) Set(entry banEntry) {
 		// cannot miss a shorter new reset event.
 		if existing.ResetAt.After(entry.ResetAt) {
 			entry.ResetAt = existing.ResetAt
-			if entry.ResetSource == "" {
-				entry.ResetSource = existing.ResetSource
+			// Preserve window-bound semantics (manual_unban permanent bans, reason codes).
+			// A shorter 429 must not rewrite a longer 403/401 manual window into quota.
+			entry.ResetSource = existing.ResetSource
+			if existing.ErrorCode != "" {
+				entry.ErrorCode = existing.ErrorCode
+			}
+			if existing.ErrorCodeDiag != "" && entry.ErrorCodeDiag == "" {
+				entry.ErrorCodeDiag = existing.ErrorCodeDiag
 			}
 		}
 	}
@@ -292,7 +298,7 @@ func writeBanEntries(path string, entries []banEntry) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempName, path)
+	return replaceFileWithRetry(tempName, path)
 }
 
 func (s *banStore) Load(path string, now time.Time) error {
@@ -308,16 +314,17 @@ func (s *banStore) Load(path string, now time.Time) error {
 	}
 	// Decode into a temporary structure first. Never clear live memory on corrupt JSON.
 	var encoded []struct {
-		AuthID      string    `json:"auth_id"`
-		Provider    string    `json:"provider"`
-		ErrorCode   string    `json:"error_code"`
-		BannedAt    time.Time `json:"banned_at"`
-		ResetAt     time.Time `json:"reset_at"`
-		ResetSource string    `json:"reset_source"`
-		TraceID     string    `json:"trace_id,omitempty"`
-		CpaSynced   *bool     `json:"cpa_synced"`
-		Revision    uint64    `json:"revision,omitempty"`
-		CpaSyncError string    `json:"cpa_sync_error,omitempty"`
+		AuthID        string    `json:"auth_id"`
+		Provider      string    `json:"provider"`
+		ErrorCode     string    `json:"error_code"`
+		ErrorCodeDiag string    `json:"error_code_diag,omitempty"`
+		BannedAt      time.Time `json:"banned_at"`
+		ResetAt       time.Time `json:"reset_at"`
+		ResetSource   string    `json:"reset_source"`
+		TraceID       string    `json:"trace_id,omitempty"`
+		CpaSynced     *bool     `json:"cpa_synced"`
+		Revision      uint64    `json:"revision,omitempty"`
+		CpaSyncError  string    `json:"cpa_sync_error,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &encoded); err != nil {
 		return err
@@ -329,16 +336,17 @@ func (s *banStore) Load(path string, now time.Time) error {
 			continue
 		}
 		entry := banEntry{
-			AuthID:      item.AuthID,
-			Provider:    item.Provider,
-			ErrorCode:   item.ErrorCode,
-			BannedAt:    item.BannedAt,
-			ResetAt:     item.ResetAt,
-			ResetSource: item.ResetSource,
-			TraceID:     item.TraceID,
-			CpaSynced:   true, // legacy default
-			Revision:    item.Revision,
-			CpaSyncError: item.CpaSyncError,
+			AuthID:        item.AuthID,
+			Provider:      item.Provider,
+			ErrorCode:     item.ErrorCode,
+			ErrorCodeDiag: item.ErrorCodeDiag,
+			BannedAt:      item.BannedAt,
+			ResetAt:       item.ResetAt,
+			ResetSource:   item.ResetSource,
+			TraceID:       item.TraceID,
+			CpaSynced:     true, // legacy default
+			Revision:      item.Revision,
+			CpaSyncError:  item.CpaSyncError,
 		}
 		if item.CpaSynced != nil {
 			entry.CpaSynced = *item.CpaSynced

@@ -20,13 +20,15 @@ const (
 )
 
 type banEntry struct {
-	AuthID      string    `json:"auth_id"`
-	Provider    string    `json:"provider"`
-	ErrorCode   string    `json:"error_code"`
-	BannedAt    time.Time `json:"banned_at"`
-	ResetAt     time.Time `json:"reset_at"`
-	ResetSource string    `json:"reset_source"`
-	TraceID     string    `json:"trace_id,omitempty"`
+	AuthID    string `json:"auth_id"`
+	Provider  string `json:"provider"`
+	ErrorCode string `json:"error_code"`
+	// ErrorCodeDiag is optional body-level diagnostic code; category uses ErrorCode.
+	ErrorCodeDiag string    `json:"error_code_diag,omitempty"`
+	BannedAt      time.Time `json:"banned_at"`
+	ResetAt       time.Time `json:"reset_at"`
+	ResetSource   string    `json:"reset_source"`
+	TraceID       string    `json:"trace_id,omitempty"`
 	// CpaSynced is true after a successful CPA disable/enable PATCH.
 	// False means local ban is active for scheduling but CPA may still be enabled.
 	CpaSynced bool `json:"cpa_synced"`
@@ -35,7 +37,6 @@ type banEntry struct {
 	// CpaSyncError is the last CPA disable/enable sync failure (never contains credentials).
 	CpaSyncError string `json:"cpa_sync_error,omitempty"`
 }
-
 
 // isContentSafetyViolation reports request-level moderation/safety blocks.
 // These must never trigger account auto-disable/delete recommendations.
@@ -59,6 +60,11 @@ func isContentSafetyViolation(code, message string) bool {
 // isAccountLevelPermissionDenied requires explicit account-level permission evidence.
 // HTTP 403 + code=permission-denied alone is insufficient (WAF/safety/other 403s).
 func isAccountLevelPermissionDenied(status int, code, message string) bool {
+	// Account-level permission denial is an HTTP 403 phenomenon for classify/detect.
+	// Never promote 500/200/etc. body text (credentials/suspended) into permission_denied.
+	if status != http.StatusForbidden {
+		return false
+	}
 	if isContentSafetyViolation(code, message) {
 		return false
 	}
@@ -84,7 +90,6 @@ func isAccountLevelPermissionDenied(status int, code, message string) bool {
 		return true
 	}
 	// Bare permission-denied / generic forbidden is not enough.
-	_ = status
 	return false
 }
 
@@ -102,11 +107,14 @@ func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (b
 	status := record.Failure.StatusCode
 	errorCode, hasCode := parseErrorCode(record.Failure.Body)
 	msg := parseErrorMessage(record.Failure.Body)
+	var diagCode string
 	if status == http.StatusUnauthorized {
-		if !hasCode {
-			errorCode = unauthorizedErrorCode
+		// Visible error_code/category must always be unauthorized for any HTTP 401,
+		// even when body code is permission-denied / spending-limit / etc.
+		if hasCode {
+			diagCode = errorCode
 		}
-		// Keep diagnostic body code (authentication_error, etc.); category maps to unauthorized.
+		errorCode = unauthorizedErrorCode
 	} else if !hasCode {
 		return banEntry{}, false
 	}
@@ -124,13 +132,14 @@ func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (b
 	}
 
 	return banEntry{
-		AuthID:      authID,
-		Provider:    provider,
-		ErrorCode:   errorCode,
-		BannedAt:    now,
-		ResetAt:     resetAt,
-		ResetSource: resetSource,
-		TraceID:     firstHeader(record.ResponseHeaders, "X-Request-Id"),
+		AuthID:        authID,
+		Provider:      provider,
+		ErrorCode:     errorCode,
+		ErrorCodeDiag: diagCode,
+		BannedAt:      now,
+		ResetAt:       resetAt,
+		ResetSource:   resetSource,
+		TraceID:       firstHeader(record.ResponseHeaders, "X-Request-Id"),
 	}, true
 }
 
@@ -181,7 +190,7 @@ func parseErrorCode(body string) (string, bool) {
 }
 
 func resolveResetAt(headers http.Header, now time.Time, fallback time.Duration) (time.Time, string) {
-	if resetAt, ok := absoluteResetTime(headers); ok && resetAt.After(now) {
+	if resetAt, ok := absoluteResetTime(headers, now); ok && resetAt.After(now) {
 		return resetAt, "header_absolute"
 	}
 	if retryAfter, ok := retryAfterDuration(headers, now); ok {
@@ -195,17 +204,25 @@ func resolveResetAt(headers http.Header, now time.Time, fallback time.Duration) 
 	return now.Add(fallback), "local_plus_fallback"
 }
 
-func absoluteResetTime(headers http.Header) (time.Time, bool) {
+func absoluteResetTime(headers http.Header, now time.Time) (time.Time, bool) {
+	// Callers must supply the inspection/usage clock; do not sample wall time here.
+	if now.IsZero() {
+		return time.Time{}, false
+	}
+	maxFuture := now.AddDate(5, 0, 0)
 	for _, name := range []string{"X-RateLimit-Reset-At", "X-Reset-At", "X-Grok-Reset-At"} {
 		value := firstHeader(headers, name)
 		if value == "" {
 			continue
 		}
 		if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+			if !parsed.After(now) || parsed.After(maxFuture) {
+				continue
+			}
 			return parsed, true
 		}
 		if unix, err := strconv.ParseInt(value, 10, 64); err == nil {
-			parsed, ok := unixResetTime(unix, time.Now())
+			parsed, ok := unixResetTime(unix, now)
 			if ok {
 				return parsed, true
 			}
@@ -231,7 +248,6 @@ func retryAfterDuration(headers http.Header, now time.Time) (time.Duration, bool
 func firstHeader(headers http.Header, name string) string {
 	return strings.TrimSpace(headers.Get(name))
 }
-
 
 // unixResetTime accepts Unix seconds or 13-digit milliseconds.
 // Rejects absurd far-future and clearly invalid values so callers fall back.
@@ -259,7 +275,7 @@ func unixResetTime(unix int64, now time.Time) (time.Time, bool) {
 
 func parseErrorMessage(body string) string {
 	var payload struct {
-		Error any `json:"error"`
+		Error   any    `json:"error"`
 		Message string `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {

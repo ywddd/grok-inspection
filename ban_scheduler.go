@@ -65,14 +65,8 @@ func handleUsageRecord(record pluginapi.UsageRecord, cfg pluginConfig, now time.
 		)
 		activeStore.UpdateCpaSyncState(entry.AuthID, false, "dispose queue full")
 	}
-	// Persist asynchronously so usage.handle stays non-blocking.
-	if cfg.PersistState && cfg.StateFile != "" {
-		go func(path string) {
-			if err := activeStore.Save(path); err != nil {
-				slog.Warn("grok-inspection: failed to save ban state", "error", err)
-			}
-		}(cfg.StateFile)
-	}
+	// Coalesced dirty persist: never spawn unbounded Save goroutines from usage path.
+	markBanStoreDirty()
 	entry, _ = activeStore.Get(entry.AuthID)
 	return entry, nil
 }
@@ -127,8 +121,42 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 		expectedRev := entry.Revision
 		var enabled bool
 		var errEnable error
+		var keptNewer bool
 		_ = withAuthOp(authID, func() error {
 			enabled, errEnable = enableAuthInCPAAllowMissing(authID, "")
+			if errEnable != nil {
+				return errEnable
+			}
+			// enable + revision check + optional re-disable + DeleteIf share one critical section.
+			current, still := store.Get(authID)
+			if still && current.Revision != expectedRev {
+				if current.Revision > expectedRev {
+					keptNewer = true
+					if errDisable := disableAuthInCPA(authID); errDisable != nil {
+						store.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
+						slog.Warn("grok-inspection: re-disable after concurrent ban failed", "auth_id", authID, "error", errDisable)
+					} else {
+						store.UpdateCpaSyncState(authID, true, "")
+					}
+				}
+				return nil
+			}
+			if !store.DeleteIf(authID, expectedRev) {
+				return nil
+			}
+			restored++
+			if enabled {
+				slog.Info("grok-inspection: re-enabled expired ban",
+					"auth_id", authID,
+					"error_code", entry.ErrorCode,
+					"reset_source", entry.ResetSource,
+				)
+			} else {
+				slog.Info("grok-inspection: dropped ban for missing auth",
+					"auth_id", authID,
+					"error_code", entry.ErrorCode,
+				)
+			}
 			return nil
 		})
 		if errEnable != nil {
@@ -140,40 +168,16 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 			)
 			continue
 		}
-		// If a newer ban landed while we were enabling, re-disable and keep it.
-		if current, still := store.Get(authID); still && current.Revision != expectedRev {
-			if current.Revision > expectedRev {
-				if errDisable := disableAuthInCPA(authID); errDisable != nil {
-					store.UpdateCpaSynced(authID, false)
-					slog.Warn("grok-inspection: re-disable after concurrent ban failed", "auth_id", authID, "error", errDisable)
-				} else {
-					store.UpdateCpaSynced(authID, true)
-				}
-			}
+		if keptNewer {
 			continue
-		}
-		if !store.DeleteIf(authID, expectedRev) {
-			continue
-		}
-		restored++
-		if enabled {
-			slog.Info("grok-inspection: re-enabled expired ban",
-				"auth_id", authID,
-				"error_code", entry.ErrorCode,
-				"reset_source", entry.ResetSource,
-			)
-		} else {
-			slog.Info("grok-inspection: dropped ban for missing auth",
-				"auth_id", authID,
-				"error_code", entry.ErrorCode,
-			)
 		}
 	}
 	if restored > 0 {
 		dirty = true
 	}
 	if dirty {
-		if err := saveActiveStoreErr(); err != nil {
+		markBanStoreDirty()
+		if err := flushBanPersistWorker(); err != nil {
 			slog.Warn("grok-inspection: failed to save ban state after restore", "error", err)
 		}
 	}

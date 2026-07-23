@@ -119,7 +119,7 @@ func TestRestoreExpiredBansKeepsEntryOnEnableFailure(t *testing.T) {
 		BannedAt:    now.Add(-time.Hour),
 		ResetAt:     now.Add(-time.Second),
 		ResetSource: "date_plus_fallback",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	restored, failed := restoreExpiredBans(store, now)
 	if restored != 0 || failed != 1 {
@@ -141,7 +141,7 @@ func TestBanStoreLoadKeepsExpiredForRestore(t *testing.T) {
 		BannedAt:    now.Add(-2 * time.Hour),
 		ResetAt:     now.Add(-time.Minute),
 		ResetSource: "local_plus_fallback",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	if err := store.Save(path); err != nil {
 		t.Fatal(err)
@@ -205,7 +205,7 @@ func TestRestoreExpiredBansWorksWhenAutobanDisabled(t *testing.T) {
 		BannedAt:    now.Add(-time.Hour),
 		ResetAt:     now.Add(-time.Minute),
 		ResetSource: "local_plus_fallback",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	restored, failed := restoreExpiredBans(store, now)
 	if restored != 1 || failed != 0 {
@@ -247,7 +247,7 @@ func TestRestoreExpiredBansDropsMissingAuth(t *testing.T) {
 		BannedAt:    now.Add(-time.Hour),
 		ResetAt:     now.Add(-time.Second),
 		ResetSource: "date_plus_fallback",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	restored, failed := restoreExpiredBans(store, now)
 	if restored != 1 || failed != 0 {
@@ -269,7 +269,7 @@ func TestBanStatusCountMatchesBansList(t *testing.T) {
 		BannedAt:    now.Add(-time.Hour),
 		ResetAt:     now.Add(2 * time.Hour),
 		ResetSource: "local_plus_fallback",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	activeStore.Set(banEntry{
 		AuthID:      "m1.json",
@@ -278,7 +278,7 @@ func TestBanStatusCountMatchesBansList(t *testing.T) {
 		BannedAt:    now.Add(-time.Hour),
 		ResetAt:     now.AddDate(100, 0, 0),
 		ResetSource: "manual_unban",
-			CpaSynced:   true,
+		CpaSynced:   true,
 	})
 	// expired free-usage appears in bans list (pending_restore) so operators can act on it
 	activeStore.Set(banEntry{
@@ -365,7 +365,6 @@ func TestRestoreLoopSourceIndependentOfEnabled(t *testing.T) {
 		t.Fatal("restore loop must call restoreExpiredBans")
 	}
 }
-
 
 func TestRestoreExpiredBansDropsUnsyncedWhenAuthNotFound(t *testing.T) {
 	// Manual 401/403 bans that never synced must not retry forever when CPA says

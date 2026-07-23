@@ -175,12 +175,23 @@ func classifyProbe(input classifyInput) classifyResult {
 	blob := lower(input.ChatCode) + " " + lower(input.ChatError)
 	disabled := input.Disabled
 
-	if status == http.StatusUnauthorized || containsAny(blob,
+	// Content safety / moderation first: keep account (never reauth/disable/delete).
+	if isContentSafetyViolation(input.ChatCode, input.ChatError) {
+		reason := strings.TrimSpace(firstNonEmpty(input.ChatError, input.ChatCode, T(input.Lang, "probe_failed")))
+		if status > 0 {
+			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
+		}
+		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
+	}
+
+	// Auth expiry. HTTP 401 always reauth. Text-based unauthorized must not apply on 403
+	// (account permission / WAF handled below).
+	if status == http.StatusUnauthorized || (status != http.StatusForbidden && containsAny(blob,
 		"token is expired",
 		"token has been invalidated",
 		"invalid_grant",
 		"unauthorized",
-	) {
+	)) {
 		return classifyResult{Classification: "reauth", Action: "delete", Reason: T(input.Lang, "auth_expired")}
 	}
 	// Only Grok free-usage exhaustion (not bare 429 / generic rate limit).
@@ -210,14 +221,6 @@ func classifyProbe(input classifyInput) classifyResult {
 			reason := T(input.Lang, "spending_limit")
 			return classifyResult{Classification: "spending_limit", Action: action, Reason: fmt.Sprintf("%s (HTTP %d)", reason, status)}
 		}
-	}
-	// Content safety / moderation: keep account, do not recommend disable/delete.
-	if isContentSafetyViolation(input.ChatCode, input.ChatError) {
-		reason := strings.TrimSpace(firstNonEmpty(input.ChatError, input.ChatCode, T(input.Lang, "probe_failed")))
-		if status > 0 {
-			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
-		}
-		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
 	}
 	// Account-level permission denial only (not bare 403 / WAF / unrelated codes).
 	// Never reclassify bare/unknown 402 via permission text heuristics.

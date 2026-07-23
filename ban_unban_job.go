@@ -32,16 +32,16 @@ func unbanJobStatus() map[string]any {
 	unbanJob.mu.Lock()
 	defer unbanJob.mu.Unlock()
 	out := map[string]any{
-		"running":        unbanJob.running,
-		"stopped":        unbanJob.stopped && !unbanJob.running,
-		"done":           unbanJob.done,
-		"total":          unbanJob.total,
-		"enabled":        unbanJob.enabled,
-		"missing":        unbanJob.missing,
-		"failed":         unbanJob.failed,
-		"current":        unbanJob.current,
-		"failures":       append([]string(nil), unbanJob.failures...),
-		"persist_error":  unbanJob.persistError,
+		"running":       unbanJob.running,
+		"stopped":       unbanJob.stopped && !unbanJob.running,
+		"done":          unbanJob.done,
+		"total":         unbanJob.total,
+		"enabled":       unbanJob.enabled,
+		"missing":       unbanJob.missing,
+		"failed":        unbanJob.failed,
+		"current":       unbanJob.current,
+		"failures":      append([]string(nil), unbanJob.failures...),
+		"persist_error": unbanJob.persistError,
 	}
 	if !unbanJob.startedAt.IsZero() {
 		out["started_at"] = unbanJob.startedAt.Format(time.RFC3339)

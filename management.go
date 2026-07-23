@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 import (
 	"bytes"
@@ -371,22 +371,3 @@ func callCPAManagementWithAuth(method, path string, body []byte, password string
 
 // findAuthFromResults resolves an auth identity from the in-memory inspection
 // list without calling host.auth.list (which is O(n) over all CPA accounts).
-
-// installCPAManagementDialForTest swaps management dial under lock. Cleanup freezes
-// ban dispose workers until idle, then restores dial — safe for Usage/async disable tests.
-func installCPAManagementDialForTest(t interface {
-	Helper()
-	Cleanup(func())
-	Fatalf(string, ...any)
-}, baseURL string, do func(*http.Request) (*http.Response, error)) {
-	t.Helper()
-	oldBase := getCPAManagementBaseURL()
-	oldDo := getCPAManagementDo()
-	setCPAManagementDial(baseURL, do)
-	t.Cleanup(func() {
-		freezeAndWaitBanDisposeIdleForTest(t)
-		setCPAManagementDial(oldBase, oldDo)
-		unfreezeBanDisposeWorkersForTest()
-	})
-}
-

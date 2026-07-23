@@ -391,7 +391,7 @@ func TestLoadBanStateUsesConfiguredPathOnly(t *testing.T) {
 
 	isolateActiveStore(t)
 	_ = os.Setenv("GROK_INSPECTION_DATA_DIR", filepath.Dir(badPath))
-	t.Cleanup(func() { _ = os.Unsetenv("GROK_INSPECTION_DATA_DIR") })
+	t.Cleanup(func() { restorePackageTestDataEnv() })
 
 	oldCfg := loadedConfig()
 	cfg := defaultPluginConfig()

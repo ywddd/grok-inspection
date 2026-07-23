@@ -19,7 +19,21 @@ func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
 		releaseHostCall()
 	}
 	rearmHostCallAdmissionForTest()
+
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	triggerRelease := func() {
+		releaseOnce.Do(func() {
+			close(release)
+		})
+	}
+	var goroutines sync.WaitGroup
 	t.Cleanup(func() {
+		triggerRelease()
+		goroutines.Wait()
+		if inflight := hostCallInflight(); inflight != 0 {
+			t.Errorf("inflight = %d after joining test goroutines, want 0", inflight)
+		}
 		for hostCallInflight() > 0 {
 			releaseHostCall()
 		}
@@ -27,21 +41,23 @@ func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
 	})
 
 	var started sync.WaitGroup
-	var release sync.WaitGroup
 	started.Add(maxWorkers)
-	release.Add(1)
+	goroutines.Add(maxWorkers)
 
 	for i := 0; i < maxWorkers; i++ {
 		go func() {
+			defer goroutines.Done()
 			acquireHostCall()
 			started.Done()
-			release.Wait()
+			<-release
 			releaseHostCall()
 		}()
 	}
 
 	done := make(chan struct{})
+	goroutines.Add(1)
 	go func() {
+		defer goroutines.Done()
 		started.Wait()
 		close(done)
 	}()
@@ -56,7 +72,9 @@ func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
 	}
 
 	blocked := make(chan struct{})
+	goroutines.Add(1)
 	go func() {
+		defer goroutines.Done()
 		acquireHostCall()
 		close(blocked)
 		releaseHostCall()
@@ -68,10 +86,11 @@ func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	release.Done()
+	triggerRelease()
 	select {
 	case <-blocked:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for blocked acquire after release")
 	}
+	goroutines.Wait()
 }

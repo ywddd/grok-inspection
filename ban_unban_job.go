@@ -146,6 +146,12 @@ func releaseUnbanSlot(runID uint64) {
 //   - keptNewer: a concurrent newer ban was retained
 //   - err: re-disable failed while keeping the newer ban (caller must treat as failure)
 func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (removed bool, keptNewer bool, err error) {
+	return commitUnbanAfterEnableWithOrigin(authID, expectedRev, hadEntry, "", nil)
+}
+
+// commitUnbanAfterEnableWithOrigin is the operator-path CAS helper. password and
+// originHeaders are used only for the conflict re-disable compensation call.
+func commitUnbanAfterEnableWithOrigin(authID string, expectedRev uint64, hadEntry bool, password string, originHeaders http.Header) (removed bool, keptNewer bool, err error) {
 	if !hadEntry {
 		return false, false, nil
 	}
@@ -160,14 +166,14 @@ func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (r
 	}
 	_ = current
 	// Live row has a different revision (newer concurrent ban).
-	if errDisable := disableAuthInCPA(authID); errDisable != nil {
+	if errDisable := disableAuthInCPAWithOrigin(authID, password, originHeaders); errDisable != nil {
 		activeStore.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
 		markBanStoreDirty()
 		return false, true, errDisable
 	}
 	activeStore.UpdateCpaSyncState(authID, true, "")
 	markBanStoreDirty()
-	// Explicit conflict: not missing, not success — UI/API must surface error.
+	// Explicit conflict: not missing, not success - UI/API must surface error.
 	return false, true, errUnbanSupersededByNewerBan
 }
 
@@ -205,7 +211,7 @@ func unbanOneAccountWithOrigin(authID, password string, originHeaders http.Heade
 			return errEnable
 		}
 		enabled = en
-		removed, keptNewer, errRedisable = commitUnbanAfterEnable(authID, expectedRev, hadEntry)
+		removed, keptNewer, errRedisable = commitUnbanAfterEnableWithOrigin(authID, expectedRev, hadEntry, password, originHeaders)
 		return errRedisable
 	})
 	if errEnable != nil {
@@ -350,7 +356,7 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 				if errEnable != nil {
 					return errEnable
 				}
-				removed, keptNewer, errRedisable = commitUnbanAfterEnable(target.authID, target.rev, true)
+				removed, keptNewer, errRedisable = commitUnbanAfterEnableWithOrigin(target.authID, target.rev, true, password, originHeaders)
 				return errRedisable
 			})
 			unbanJob.mu.Lock()

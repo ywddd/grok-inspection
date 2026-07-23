@@ -13,7 +13,14 @@ import (
 var errAuthFileNotFound = errors.New("auth file not found")
 
 func disableAuthInCPA(authID string) error {
-	return setAuthDisabledInCPA(authID, true, cpaManagementPasswordOrCached())
+	return disableAuthInCPAWithOrigin(authID, "", nil)
+}
+
+// disableAuthInCPAWithOrigin disables an account using an optional resolved
+// management password and detached Origin-only headers for transport fallback.
+// Background auto-disable keeps the nil-header wrapper.
+func disableAuthInCPAWithOrigin(authID, password string, originHeaders http.Header) error {
+	return setAuthDisabledInCPAWithOrigin(authID, true, password, originHeaders)
 }
 
 func enableAuthInCPA(authID string, password string) error {

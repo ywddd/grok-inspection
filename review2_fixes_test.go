@@ -136,6 +136,78 @@ func TestEnableAccountClearsMatchingBan(t *testing.T) {
 	}
 }
 
+func TestEnableAccountSuccessfulSyncSaveLeavesNoPendingBanPersist(t *testing.T) {
+	isolateActiveStore(t)
+	dir := t.TempDir()
+	stopBanPersistWorkerForTest()
+	t.Cleanup(stopBanPersistWorkerForTest)
+	useResultsStorePath(t, filepath.Join(dir, "results.json"))
+
+	oldCfg := loadedConfig()
+	cfg := oldCfg
+	cfg.PersistState = true
+	cfg.StateFile = filepath.Join(dir, "bans.json")
+	currentConfig.Store(cfg)
+	t.Cleanup(func() { currentConfig.Store(oldCfg) })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID:      "sync-save.json",
+		Provider:    "xai",
+		ErrorCode:   exhaustedErrorCode,
+		BannedAt:    now.Add(-time.Hour),
+		ResetAt:     now.Add(time.Hour),
+		ResetSource: "local_plus_fallback",
+		CpaSynced:   true,
+	})
+
+	withCPAManagement(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+
+	oldList := callHostAuthListFn
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: []pluginapi.HostAuthFileEntry{
+			{AuthIndex: "idx-sync-save", Name: "sync-save.json", Provider: "xai", Disabled: true},
+		}}, nil
+	}
+	t.Cleanup(func() { callHostAuthListFn = oldList })
+
+	engine.mu.Lock()
+	engine.results = []accountResult{{
+		AuthIndex: "idx-sync-save", Name: "sync-save.json", FileName: "sync-save.json",
+		Disabled: true, Classification: "quota_exhausted", Action: "enable",
+	}}
+	engine.mu.Unlock()
+
+	// Claim the worker slot without starting a goroutine so any redundant dirty
+	// mark remains observable after the synchronous save returns.
+	w := globalBanPersist
+	w.mu.Lock()
+	w.started = true
+	w.stop = false
+	w.dirty = false
+	w.path = ""
+	w.mu.Unlock()
+
+	if err := setAuthDisabled("sync-save.json", false, "test-pass", nil, true); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	engine.waitAsyncPersist()
+
+	w.mu.Lock()
+	dirty := w.dirty
+	w.mu.Unlock()
+	if dirty {
+		t.Fatal("successful synchronous ban save left a redundant background persist pending")
+	}
+}
+
 func TestDeleteAccountClearsMatchingBan(t *testing.T) {
 	isolateActiveStore(t)
 	engine.mu.Lock()

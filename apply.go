@@ -164,10 +164,11 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 			engine.mu.Unlock()
 		}
 		if banStateChanged && persist {
-			// Single-account path: mark + sync save for retry visibility.
-			// Bulk apply uses persist=false and relies on runApply's final saveActiveStoreErr.
-			markBanStoreDirty()
+			// Single-account path saves synchronously for immediate status. Only
+			// enqueue a background retry when that save fails; otherwise the
+			// duplicate worker write can outlive the operation.
 			if err := saveActiveStoreErr(); err != nil {
+				markBanStoreDirty()
 				return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
 			}
 		}

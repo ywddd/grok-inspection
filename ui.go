@@ -1497,59 +1497,93 @@ func renderUIPage(pluginID string) []byte {
   let confirmResolver = null;
   let confirmOpen = false;
   let confirmClosing = false;
+  let confirmArmTimer = null;
+  let ghostClickUntil = 0;
+  let ghostClickCleanup = null;
+  function installGhostClickShield(ms) {
+    const until = Date.now() + (ms || 400);
+    ghostClickUntil = Math.max(ghostClickUntil, until);
+    if (ghostClickCleanup) return;
+    const sink = (ev) => {
+      if (Date.now() > ghostClickUntil) return;
+      try {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+      } catch (_) {}
+    };
+    const types = ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'auxclick'];
+    types.forEach((t) => document.addEventListener(t, sink, true));
+    ghostClickCleanup = () => {
+      types.forEach((t) => document.removeEventListener(t, sink, true));
+      ghostClickCleanup = null;
+    };
+    setTimeout(() => {
+      if (Date.now() < ghostClickUntil) {
+        setTimeout(() => {
+          if (Date.now() >= ghostClickUntil && ghostClickCleanup) ghostClickCleanup();
+        }, ghostClickUntil - Date.now() + 10);
+        return;
+      }
+      if (ghostClickCleanup) ghostClickCleanup();
+    }, (ms || 400) + 20);
+  }
   function closeConfirm(ok) {
-    // Guard against pointerdown + click double fire.
     if (confirmClosing) return;
     if (!confirmResolver && !confirmOpen) return;
+    if (confirmArmTimer) { clearTimeout(confirmArmTimer); confirmArmTimer = null; }
     confirmClosing = true;
     const resolve = confirmResolver;
     confirmResolver = null;
     confirmOpen = false;
+    installGhostClickShield(450);
     try {
       const modal = document.getElementById('confirmModal');
       if (modal) {
         modal.classList.add('hidden');
         modal.setAttribute('aria-hidden', 'true');
+        modal.onpointerdown = null;
+        modal.onclick = null;
       }
+      const okEl = document.getElementById('confirmOk');
+      const cancelEl = document.getElementById('confirmCancel');
+      if (okEl) { okEl.onpointerdown = null; okEl.onclick = null; okEl.disabled = false; }
+      if (cancelEl) { cancelEl.onpointerdown = null; cancelEl.onclick = null; }
     } catch (_) {}
-    // Resolve in microtask so UI hide is not blocked by await-chain work.
     const finished = () => {
       confirmClosing = false;
       if (resolve) {
         try { resolve(!!ok); } catch (_) {}
       }
-      // Resume poll if a job is still running (inspect side).
       try {
         if (typeof syncPolling === 'function') syncPolling(state && state.snapshot);
       } catch (_) {}
     };
     try {
-      if (typeof queueMicrotask === 'function') queueMicrotask(finished);
-      else setTimeout(finished, 0);
+      setTimeout(finished, 0);
     } catch (_) {
       finished();
     }
   }
   function bindConfirmAction(el, value) {
     if (!el) return;
-    const fire = (ev) => {
+    el.onpointerdown = null;
+    el.onclick = (ev) => {
       try {
         if (ev) {
           ev.preventDefault();
           ev.stopPropagation();
+          if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
         }
       } catch (_) {}
+      if (value && el.disabled) return;
       closeConfirm(value);
     };
-    // pointerdown responds before click; click kept as fallback.
-    el.onpointerdown = fire;
-    el.onclick = fire;
   }
   function confirmDialog(title, message, opts) {
     opts = opts || {};
     const showCancel = opts.showCancel !== false;
     return new Promise((resolve) => {
-      // Drop any previous pending dialog as cancel to avoid stuck promises.
       if (confirmResolver) {
         const prev = confirmResolver;
         confirmResolver = null;
@@ -1572,16 +1606,13 @@ func renderUIPage(pluginID string) []byte {
       confirmResolver = resolve;
       confirmOpen = true;
       confirmClosing = false;
-      // Pause inspect polling while modal is open so cancel is not delayed by render().
       try { if (typeof stopPolling === 'function') stopPolling(); } catch (_) {}
       titleEl.textContent = title || t('confirm_title');
       msgEl.textContent = message || '';
       if (cancelEl) cancelEl.style.display = showCancel ? '' : 'none';
       bindConfirmAction(okEl, true);
       bindConfirmAction(cancelEl, false);
-      modal.onpointerdown = (ev) => {
-        if (ev.target === modal) closeConfirm(false);
-      };
+      modal.onpointerdown = null;
       modal.onclick = (ev) => {
         if (ev.target === modal) closeConfirm(false);
       };
@@ -1590,6 +1621,14 @@ func renderUIPage(pluginID string) []byte {
         card.onpointerdown = (ev) => { try { ev.stopPropagation(); } catch (_) {} };
         card.onclick = (ev) => { try { ev.stopPropagation(); } catch (_) {} };
       }
+      try {
+        okEl.disabled = true;
+        if (confirmArmTimer) clearTimeout(confirmArmTimer);
+        confirmArmTimer = setTimeout(() => {
+          confirmArmTimer = null;
+          try { okEl.disabled = false; } catch (_) {}
+        }, 450);
+      } catch (_) {}
       modal.classList.remove('hidden');
       modal.setAttribute('aria-hidden', 'false');
       try {
@@ -1607,6 +1646,7 @@ func renderUIPage(pluginID string) []byte {
     try { ev.preventDefault(); } catch (_) {}
     closeConfirm(false);
   });
+  
   function classificationsForFilter(filter) {
     if (!filter || filter === 'all') return [];
     // Server expands "other" to non-primary classes.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -27,6 +28,10 @@ type unbanJobState struct {
 }
 
 var unbanJob = &unbanJobState{}
+
+// errUnbanSupersededByNewerBan is returned when enable succeeded but a concurrent
+// newer ban was retained (and re-disabled). Callers must not report missing=true.
+var errUnbanSupersededByNewerBan = errors.New("unban_conflict: concurrent ban retained")
 
 func unbanJobStatus() map[string]any {
 	unbanJob.mu.Lock()
@@ -135,22 +140,26 @@ func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (r
 	if !hadEntry {
 		return false, false, nil
 	}
-	if current, still := activeStore.Get(authID); still {
-		if current.Revision == expectedRev {
-			return activeStore.DeleteIf(authID, expectedRev), false, nil
-		}
-		if current.Revision > expectedRev {
-			if errDisable := disableAuthInCPA(authID); errDisable != nil {
-				activeStore.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
-				markBanStoreDirty()
-				return false, true, errDisable
-			}
-			activeStore.UpdateCpaSyncState(authID, true, "")
-			markBanStoreDirty()
-			return false, true, nil
-		}
+	// Atomic delete-or-observe: closes the Get->DeleteIf race where a newer ban
+	// lands between the two and would leave CPA enabled with no re-disable.
+	deleted, current, present := activeStore.DeleteIfOrCurrent(authID, expectedRev)
+	if deleted {
+		return true, false, nil
 	}
-	return false, false, nil
+	if !present {
+		return false, false, nil
+	}
+	_ = current
+	// Live row has a different revision (newer concurrent ban).
+	if errDisable := disableAuthInCPA(authID); errDisable != nil {
+		activeStore.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
+		markBanStoreDirty()
+		return false, true, errDisable
+	}
+	activeStore.UpdateCpaSyncState(authID, true, "")
+	markBanStoreDirty()
+	// Explicit conflict: not missing, not success — UI/API must surface error.
+	return false, true, errUnbanSupersededByNewerBan
 }
 
 // unbanOneAccount enables one auth in CPA and drops the matching ban revision.
@@ -200,23 +209,35 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 			unbanJob.failed++
 			unbanJob.done++
 			if len(unbanJob.failures) < 20 {
-				unbanJob.failures = append(unbanJob.failures, authID+": re-disable after concurrent ban: "+sanitizeCPASyncError(errRedisable))
+				msg := authID + ": " + errRedisable.Error()
+				if errors.Is(errRedisable, errUnbanSupersededByNewerBan) {
+					msg = authID + ": " + errUnbanSupersededByNewerBan.Error()
+				} else {
+					msg = authID + ": re-disable after concurrent ban: " + sanitizeCPASyncError(errRedisable)
+				}
+				unbanJob.failures = append(unbanJob.failures, msg)
 			}
 		}
 		unbanJob.mu.Unlock()
 		if err := saveActiveStoreErr(); err != nil {
-			return false, false, fmt.Errorf("re-disable failed and ban state persist failed: %w", err)
+			return false, false, fmt.Errorf("%v; also failed to persist ban state: %w", errRedisable, err)
+		}
+		// Keep sentinel for conflict; wrap other re-disable errors.
+		if errors.Is(errRedisable, errUnbanSupersededByNewerBan) {
+			return false, false, errUnbanSupersededByNewerBan
 		}
 		return false, false, fmt.Errorf("re-disable after concurrent ban: %w", errRedisable)
 	}
+	_ = keptNewer
 	unbanJob.mu.Lock()
 	if unbanJob.runID == runID {
-		if keptNewer {
-			// Newer ban retained + re-disabled: not a successful unban.
-		} else if enabled {
+		if enabled && removed {
 			unbanJob.enabled++
-		} else {
+		} else if !enabled {
 			unbanJob.missing++
+		} else {
+			// enabled but not removed without error should not happen
+			unbanJob.failed++
 		}
 		unbanJob.done++
 	}
@@ -224,7 +245,6 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 	if err := saveActiveStoreErr(); err != nil {
 		return enabled && removed, removed, fmt.Errorf("unbanned in CPA but failed to persist ban state: %w", err)
 	}
-	// Report true unban success only when the local ban was removed.
 	return enabled && removed, removed, nil
 }
 
@@ -322,15 +342,18 @@ func startUnbanJob(authIDs []string, category, password string) error {
 				if sameJob {
 					unbanJob.failed++
 					if len(unbanJob.failures) < 20 {
-						unbanJob.failures = append(unbanJob.failures, target.authID+": re-disable after concurrent ban: "+sanitizeCPASyncError(errRedisable))
+						msg := target.authID + ": " + errRedisable.Error()
+						if !errors.Is(errRedisable, errUnbanSupersededByNewerBan) {
+							msg = target.authID + ": re-disable after concurrent ban: " + sanitizeCPASyncError(errRedisable)
+						}
+						unbanJob.failures = append(unbanJob.failures, msg)
 					}
 					unbanJob.done++
 				}
 			} else if sameJob {
-				if keptNewer {
-					// Retained newer ban after re-disable: not counted as unban success.
-					_ = removed
-				} else if enabled {
+				_ = keptNewer
+				_ = removed
+				if enabled {
 					unbanJob.enabled++
 				} else {
 					unbanJob.missing++

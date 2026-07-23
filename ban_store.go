@@ -83,17 +83,33 @@ func (s *banStore) Delete(authID string) bool {
 // DeleteIf removes authID only when the stored revision still matches expected.
 // Used by restore so a concurrent newer ban is not deleted by mistake.
 func (s *banStore) DeleteIf(authID string, revision uint64) bool {
+	deleted, _, _ := s.DeleteIfOrCurrent(authID, revision)
+	return deleted
+}
+
+// DeleteIfOrCurrent atomically deletes authID when revision matches expected under
+// store.mu. If a concurrent newer (or otherwise non-matching) entry exists, it is
+// returned so callers can re-disable CPA instead of silently leaving it enabled.
+//
+//	deleted=true  -> row removed; present=false
+//	deleted=false, present=false -> no row (already gone)
+//	deleted=false, present=true  -> row remains; current is the live entry
+func (s *banStore) DeleteIfOrCurrent(authID string, expected uint64) (deleted bool, current banEntry, present bool) {
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return false, banEntry{}, false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry, ok := s.bans[authID]
 	if !ok {
-		return false
+		return false, banEntry{}, false
 	}
-	if entry.Revision != revision {
-		return false
+	if entry.Revision == expected {
+		delete(s.bans, authID)
+		return true, banEntry{}, false
 	}
-	delete(s.bans, authID)
-	return true
+	return false, entry, true
 }
 
 // DeleteIfResetAt is kept for tests that still pass reset time; prefers revision when set.

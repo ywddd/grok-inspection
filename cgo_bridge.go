@@ -126,10 +126,12 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 
 //export cliproxyPluginShutdown
 func cliproxyPluginShutdown() {
+	// Stop producers that enqueue ban mutations first. Do NOT stop the ban
+	// persist worker yet: engine.shutdown waits for runWG/unban (and other
+	// writers) and only then performs the final synchronous ban-state flush.
 	stopInspectionScheduleLoop()
 	stopBanRestoreLoop()
 	stopBanDisposeWorkers()
-	stopBanPersistWorker()
 	engine.shutdown()
 	C.clear_host_api()
 }

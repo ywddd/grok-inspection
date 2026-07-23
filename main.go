@@ -247,12 +247,13 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		if errUnban != nil {
 			status := http.StatusBadRequest
 			msg := errUnban.Error()
-			if strings.Contains(msg, "busy") {
+			if strings.Contains(msg, "busy") || strings.Contains(msg, "unban_conflict") {
 				status = http.StatusConflict
 			} else if strings.Contains(msg, "persist ban state") {
 				status = http.StatusInternalServerError
 			}
-			return jsonResponse(status, map[string]any{"error": msg, "ok": false, "removed": removed, "enabled": enabled})
+			// Never set missing=true on error (including superseded concurrent ban).
+			return jsonResponse(status, map[string]any{"error": msg, "ok": false, "removed": removed, "enabled": enabled, "missing": false})
 		}
 		return jsonResponse(http.StatusOK, map[string]any{
 			"ok":      true,

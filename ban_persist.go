@@ -12,6 +12,9 @@ var banStoreSaveFn = func(path string) error {
 	return activeStore.Save(path)
 }
 
+// beforeBanPersistFinalFlush is optional (tests): runs after worker exit, before final Save.
+var beforeBanPersistFinalFlush func()
+
 // banPersistWorker coalesces ban-state Save calls from usage/dispose/restore.
 // Usage callbacks only mark dirty; a single worker flushes and can stop/flush on shutdown.
 type banPersistWorker struct {
@@ -52,6 +55,9 @@ func stopBanPersistWorker() {
 		if started {
 			w.wg.Wait()
 		}
+		if beforeBanPersistFinalFlush != nil {
+			beforeBanPersistFinalFlush()
+		}
 		// Still attempt a final sync save (covers prior failed writes).
 		if err := flushBanPersistLocked(); err != nil {
 			slog.Warn("grok-inspection: final ban persist after stop failed", "error", err)
@@ -64,6 +70,9 @@ func stopBanPersistWorker() {
 	w.mu.Unlock()
 	if started {
 		w.wg.Wait()
+	}
+	if beforeBanPersistFinalFlush != nil {
+		beforeBanPersistFinalFlush()
 	}
 	// Explicit final synchronous save after the worker has exited. Bounded: one attempt.
 	if err := flushBanPersistLocked(); err != nil {

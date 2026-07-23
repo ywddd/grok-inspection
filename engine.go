@@ -712,9 +712,9 @@ func (e *inspectionEngine) abortRunLocked() {
 }
 
 func (e *inspectionEngine) shutdown() {
-	// Stop background CPA dispose workers before waiting on other lifecycle gates.
+	// Stop accepting new dispose/unban work, then wait for every producer that
+	// may mutate the ban store (runWG action/apply workers, unban job).
 	stopBanDisposeWorkers()
-	stopBanPersistWorker()
 	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true
@@ -727,8 +727,11 @@ func (e *inspectionEngine) shutdown() {
 	unbanJob.wg.Wait()
 	// Async results.json writers must finish before TempDir/teardown.
 	e.waitAsyncPersist()
+	// Final ban-state flush only after all ban-store producers have exited so a
+	// late Set cannot land after persist worker stop with no further flush.
+	stopBanPersistWorker()
 	// Soft-timeout probes may still hold abandoned host.http.do callbacks.
-	// Wait until they finish before clearing host/dlclose.
+	// Wait until they finish before clearing host/dlclose (unbounded; host ABI).
 	waitHostCallsForShutdown(5 * time.Second)
 	e.mu.Lock()
 	e.applyDraining = false

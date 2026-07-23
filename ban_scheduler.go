@@ -128,38 +128,37 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 			if errEnable != nil {
 				return errEnable
 			}
-			// enable + revision check + optional re-disable + DeleteIf share one critical section.
-			current, still := store.Get(authID)
-			if still && current.Revision != expectedRev {
-				if current.Revision > expectedRev {
-					keptNewer = true
-					if errDisable := disableAuthInCPA(authID); errDisable != nil {
-						store.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
-						slog.Warn("grok-inspection: re-disable after concurrent ban failed", "auth_id", authID, "error", errDisable)
-					} else {
-						store.UpdateCpaSyncState(authID, true, "")
-					}
-					// Sync-state mutation must flush even when no ban row was deleted.
-					dirty = true
+			// Atomic delete-or-observe after enable: if a newer ban landed during
+			// the enable call, DeleteIfOrCurrent returns it and we re-disable.
+			deleted, current, present := store.DeleteIfOrCurrent(authID, expectedRev)
+			if deleted {
+				restored++
+				if enabled {
+					slog.Info("grok-inspection: re-enabled expired ban",
+						"auth_id", authID,
+						"error_code", entry.ErrorCode,
+						"reset_source", entry.ResetSource,
+					)
+				} else {
+					slog.Info("grok-inspection: dropped ban for missing auth",
+						"auth_id", authID,
+						"error_code", entry.ErrorCode,
+					)
 				}
 				return nil
 			}
-			if !store.DeleteIf(authID, expectedRev) {
+			if !present {
 				return nil
 			}
-			restored++
-			if enabled {
-				slog.Info("grok-inspection: re-enabled expired ban",
-					"auth_id", authID,
-					"error_code", entry.ErrorCode,
-					"reset_source", entry.ResetSource,
-				)
+			_ = current
+			keptNewer = true
+			if errDisable := disableAuthInCPA(authID); errDisable != nil {
+				store.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
+				slog.Warn("grok-inspection: re-disable after concurrent ban failed", "auth_id", authID, "error", errDisable)
 			} else {
-				slog.Info("grok-inspection: dropped ban for missing auth",
-					"auth_id", authID,
-					"error_code", entry.ErrorCode,
-				)
+				store.UpdateCpaSyncState(authID, true, "")
 			}
+			dirty = true
 			return nil
 		})
 		if errEnable != nil {

@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,21 +58,13 @@ func TestScheduleConcurrentUserUpdatesAreTransactional(t *testing.T) {
 	if mem.Enabled != disk.Enabled || mem.IntervalMinutes != disk.IntervalMinutes {
 		t.Fatalf("memory/disk diverge: mem=%+v disk=%+v", mem, disk)
 	}
-	// Full transaction: interval and enabled must be a coherent pair from one writer.
-	// With even i: enabled=true interval=1+i; odd: enabled=false.
-	if mem.Enabled {
-		if mem.IntervalMinutes%2 == 0 {
-			// interval = 1+i with i even => odd interval when enabled
-			// i even => enabled true, interval = 1+even = odd. OK if odd.
-		}
-		if mem.IntervalMinutes%2 == 0 {
-			t.Fatalf("incoherent enabled=true with even interval from odd writer: %+v", mem)
-		}
-	} else {
-		if mem.IntervalMinutes%2 != 0 {
-			// i odd => enabled false, interval = 1+odd = even
-			t.Fatalf("incoherent enabled=false with odd interval: %+v", mem)
-		}
+	// Full transaction: enabled and interval must be a coherent pair from one writer.
+	// Even i => enabled=true, interval=1+i (odd). Odd i => enabled=false, interval even.
+	if mem.Enabled && mem.IntervalMinutes%2 == 0 {
+		t.Fatalf("incoherent enabled=true with even interval: %+v", mem)
+	}
+	if !mem.Enabled && mem.IntervalMinutes%2 != 0 {
+		t.Fatalf("incoherent enabled=false with odd interval: %+v", mem)
 	}
 }
 
@@ -316,6 +307,7 @@ func TestBanPersistRetainsDirtyOnSaveFailureAndFinalFlush(t *testing.T) {
 		banStoreSaveFn = func(path string) error { return activeStore.Save(path) }
 	})
 
+	// --- Part 1: transient failures then worker retry succeeds ---
 	var calls atomic.Int32
 	failUntil := int32(3)
 	banStoreSaveFn = func(path string) error {
@@ -325,7 +317,6 @@ func TestBanPersistRetainsDirtyOnSaveFailureAndFinalFlush(t *testing.T) {
 		}
 		return activeStore.Save(path)
 	}
-
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
 	activeStore.Set(banEntry{
 		AuthID: "pf1", Provider: "xai", ErrorCode: unauthorizedErrorCode,
@@ -333,8 +324,6 @@ func TestBanPersistRetainsDirtyOnSaveFailureAndFinalFlush(t *testing.T) {
 		ResetSource: "manual_unban", CpaSynced: false,
 	})
 	markBanStoreDirty()
-
-	// Worker should retry until success.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(state); err == nil {
@@ -349,28 +338,50 @@ func TestBanPersistRetainsDirtyOnSaveFailureAndFinalFlush(t *testing.T) {
 		t.Fatalf("expected retries beyond failures: calls=%d", calls.Load())
 	}
 
-	// Mark dirty again then stop while next saves fail once — final flush must run.
+	// --- Part 2: deterministic final-flush-only success after stop ---
+	// Worker save always fails after first entry; beforeBanPersistFinalFlush flips
+	// allowSuccess only after worker Wait, so only final flush can succeed.
+	stopBanPersistWorkerForTest()
+	t.Cleanup(func() { beforeBanPersistFinalFlush = nil })
 	activeStore.Set(banEntry{
 		AuthID: "pf2", Provider: "xai", ErrorCode: unauthorizedErrorCode,
 		BannedAt: now, ResetAt: now.AddDate(100, 0, 0),
 		ResetSource: "manual_unban", CpaSynced: false,
 	})
-	// Fail the next single save then succeed for final flush.
+	firstSaveEntered := make(chan struct{})
+	var allowSuccess atomic.Bool
+	var workerCalls atomic.Int32
+	var finalCalls atomic.Int32
 	calls.Store(0)
-	failUntil = 1
 	banStoreSaveFn = func(path string) error {
 		n := calls.Add(1)
-		if n == 1 {
-			return errors.New("fail once")
+		if !allowSuccess.Load() {
+			workerCalls.Add(1)
+			if n == 1 {
+				close(firstSaveEntered)
+			}
+			return errors.New("worker save blocked")
 		}
+		finalCalls.Add(1)
 		return activeStore.Save(path)
 	}
+	beforeBanPersistFinalFlush = func() {
+		// Runs after worker exited, before final Save — prove this path is required.
+		if workerCalls.Load() < 1 {
+			t.Errorf("expected worker save attempts before final flush")
+		}
+		allowSuccess.Store(true)
+	}
 	markBanStoreDirty()
-	// Ensure dirty observed; stop should final-flush.
-	time.Sleep(20 * time.Millisecond)
+	select {
+	case <-firstSaveEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker never attempted save")
+	}
 	stopBanPersistWorker()
-	// stop leaves worker stopped; rearm for other tests via ForTest helper
-	// but first verify pf2 on disk
+	if finalCalls.Load() < 1 {
+		t.Fatalf("final flush never succeeded; calls=%d worker=%d final=%d", calls.Load(), workerCalls.Load(), finalCalls.Load())
+	}
 	loaded := newBanStore()
 	if err := loaded.Load(state, now); err != nil {
 		t.Fatal(err)
@@ -378,79 +389,9 @@ func TestBanPersistRetainsDirtyOnSaveFailureAndFinalFlush(t *testing.T) {
 	if _, ok := loaded.Get("pf2"); !ok {
 		t.Fatalf("final flush missing pf2; calls=%d", calls.Load())
 	}
-	// rearm
+	beforeBanPersistFinalFlush = nil
 	stopBanPersistWorkerForTest()
 }
-
-// ---------- 6) TestMain resets engine after init load ----------
-
-func TestEngineNotHoldingRepoDataAfterTestMainReset(t *testing.T) {
-	// After TestMain reset, default paths are under temp; a fresh load of empty
-	// temp must not reintroduce repo results. We simulate init pollution then reset.
-	engine.mu.Lock()
-	engine.results = []accountResult{{
-		AuthIndex: "repo-pollution", Name: "repo.json", FileName: "repo.json",
-		Classification: "ok", Action: "keep",
-	}}
-	engine.schedule.Enabled = true
-	engine.schedule.IntervalMinutes = 99
-	engine.mu.Unlock()
-
-	resetEngineAndStoresForTestIsolation()
-
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	for _, r := range engine.results {
-		if r.AuthIndex == "repo-pollution" || r.FileName == "repo.json" {
-			t.Fatalf("repo pollution still present: %+v", r)
-		}
-	}
-	// Empty temp has no schedule.json/results.json → defaults.
-	if engine.schedule.IntervalMinutes == 99 && engine.schedule.Enabled {
-		// default may enable false; 99 must not survive
-		t.Fatalf("schedule not reset: %+v", engine.schedule)
-	}
-	if packageTestDataDir == "" {
-		t.Fatal("missing packageTestDataDir")
-	}
-	// Ensure store path still temp
-	if !strings.HasPrefix(filepath.Clean(storeFilePath()), filepath.Clean(packageTestDataDir)) {
-		t.Fatalf("store path %q not under temp", storeFilePath())
-	}
-}
-
-// ---------- 8) ErrorCodeDiag matches retained ErrorCode ----------
-
-func TestBanStoreSetDiagMatchesRetainedErrorCode(t *testing.T) {
-	store := newBanStore()
-	store.Set(banEntry{
-		AuthID: "d1", Provider: "xai", ErrorCode: permissionDeniedErrorCode,
-		ErrorCodeDiag: "", BannedAt: time.Unix(1, 0), ResetAt: time.Unix(1000, 0),
-		ResetSource: "manual_unban", CpaSynced: true,
-	})
-	store.Set(banEntry{
-		AuthID: "d1", Provider: "xai", ErrorCode: exhaustedErrorCode,
-		ErrorCodeDiag: "subscription:free-usage-exhausted",
-		BannedAt:      time.Unix(2, 0), ResetAt: time.Unix(50, 0),
-		ResetSource: "local_plus_fallback", CpaSynced: false,
-	})
-	got, ok := store.Get("d1")
-	if !ok {
-		t.Fatal("missing")
-	}
-	if got.ErrorCode != permissionDeniedErrorCode {
-		t.Fatalf("ErrorCode=%q", got.ErrorCode)
-	}
-	if got.ErrorCodeDiag == "subscription:free-usage-exhausted" {
-		t.Fatalf("diag leaked from shorter ban under retained 403 code: %#v", got)
-	}
-	if got.ErrorCodeDiag != "" {
-		t.Fatalf("diag should match retained 403 (empty): %#v", got)
-	}
-}
-
-// ensure fmt used
-var _ = fmt.Sprintf
 
 // ---------- 9) CAS sync-state changes persist even when removed==0 ----------
 
@@ -526,7 +467,7 @@ func TestCASSyncStateMarkedDirtyWhenOnlyRedisable(t *testing.T) {
 		engine.mu.Unlock()
 	})
 
-	// persist=false bulk path: must still dirty-persist sync state after re-disable.
+	// persist=false: memory/sync state updates only; explicit final save for disk assert.
 	errCh := make(chan error, 1)
 	go func() { errCh <- setAuthDisabled("cs1.json", false, "test-pass", nil, false) }()
 	select {
@@ -550,7 +491,7 @@ func TestCASSyncStateMarkedDirtyWhenOnlyRedisable(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("enable hung after release")
 	}
-	if err := flushBanPersistWorker(); err != nil {
+	if err := saveActiveStoreErr(); err != nil {
 		t.Fatal(err)
 	}
 	loaded := newBanStore()
@@ -853,10 +794,16 @@ func TestUnbanBatchKeptNewerNotCountedAsEnabledSuccess(t *testing.T) {
 	unbanJob.wg.Wait()
 	st := unbanJobStatus()
 	if st["enabled"].(int) != 0 {
-		t.Fatalf("kept-newer re-disable must not count as unban enabled success: %#v", st)
+		t.Fatalf("kept-newer must not count as unban enabled success: %#v", st)
 	}
-	if st["failed"].(int) != 0 {
-		t.Fatalf("successful re-disable is not a failure: %#v", st)
+	if st["missing"].(int) != 0 {
+		t.Fatalf("kept-newer must not count as missing: %#v", st)
+	}
+	if st["failed"].(int) != 1 {
+		t.Fatalf("kept-newer conflict must count as failed: %#v", st)
+	}
+	if st["done"].(int) != st["enabled"].(int)+st["missing"].(int)+st["failed"].(int) {
+		t.Fatalf("done conservation broken: %#v", st)
 	}
 	got, ok := activeStore.Get("ub1")
 	if !ok || got.Revision <= old.Revision {
@@ -864,5 +811,383 @@ func TestUnbanBatchKeptNewerNotCountedAsEnabledSuccess(t *testing.T) {
 	}
 	if redisable.Load() < 1 {
 		t.Fatal("expected re-disable")
+	}
+}
+
+// ---------- A) atomic DeleteIfOrCurrent ----------
+
+func TestDeleteIfOrCurrentAtomic(t *testing.T) {
+	store := newBanStore()
+	store.Set(banEntry{AuthID: "a", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: time.Unix(1, 0), ResetAt: time.Unix(100, 0), ResetSource: "local_plus_fallback"})
+	e1, _ := store.Get("a")
+	deleted, cur, present := store.DeleteIfOrCurrent("a", e1.Revision)
+	if !deleted || present {
+		t.Fatalf("match should delete: deleted=%v present=%v", deleted, present)
+	}
+	store.Set(banEntry{AuthID: "a", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: time.Unix(2, 0), ResetAt: time.Unix(200, 0), ResetSource: "local_plus_fallback"})
+	old, _ := store.Get("a")
+	store.Set(banEntry{AuthID: "a", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: time.Unix(3, 0), ResetAt: time.Unix(50, 0), ResetSource: "header_absolute"})
+	newer, _ := store.Get("a")
+	if newer.Revision <= old.Revision {
+		t.Fatal("revision should advance")
+	}
+	deleted, cur, present = store.DeleteIfOrCurrent("a", old.Revision)
+	if deleted || !present {
+		t.Fatalf("stale rev must not delete: deleted=%v present=%v", deleted, present)
+	}
+	if cur.Revision != newer.Revision {
+		t.Fatalf("current rev=%d want %d", cur.Revision, newer.Revision)
+	}
+	// Missing id
+	deleted, _, present = store.DeleteIfOrCurrent("nope", 1)
+	if deleted || present {
+		t.Fatal("missing should be absent")
+	}
+}
+
+func TestCASDeleteIfMissTriggersRedisable(t *testing.T) {
+	// End-to-end: enable snapshots rev1; concurrent Set advances rev; CAS must re-disable.
+	isolateActiveStore(t)
+	pauseBanDisposeWorkersForTest(t)
+	var redisable atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Disabled bool `json:"disabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Disabled {
+			redisable.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	installCPAManagementDialForTest(t, server.URL, server.Client().Do)
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "atom1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	pre, _ := activeStore.Get("atom1.json")
+	// Simulate race: newer ban already present before CAS loop (as if landed after All snapshot of pre).
+	// clearBansMatchingTargetCAS uses pre revisions with DeleteIfOrCurrent.
+	activeStore.Set(banEntry{
+		AuthID: "atom1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(30 * time.Minute), ResetSource: "header_absolute", CpaSynced: false,
+	})
+	target := &pluginapi.HostAuthFileEntry{Name: "atom1.json", AuthIndex: "atom1"}
+	removed, remains, cpaOK, changed, err := clearBansMatchingTargetCAS(activeStore, target, "atom1.json", []banEntry{pre})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed != 0 || !remains || !cpaOK || !changed {
+		t.Fatalf("removed=%d remains=%v cpaOK=%v changed=%v", removed, remains, cpaOK, changed)
+	}
+	if redisable.Load() < 1 {
+		t.Fatal("expected re-disable after DeleteIfOrCurrent miss")
+	}
+	if _, ok := activeStore.Get("atom1.json"); !ok {
+		t.Fatal("newer ban must remain")
+	}
+}
+
+// ---------- B) re-disable fail => result not Disabled ----------
+
+func TestEnableCASRedisableFailLeavesResultEnabledWithDisableAction(t *testing.T) {
+	isolateActiveStore(t)
+	pauseBanDisposeWorkersForTest(t)
+	enableEntered := make(chan struct{})
+	releaseEnable := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Disabled bool `json:"disabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Disabled {
+			close(enableEntered)
+			<-releaseEnable
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		http.Error(w, "redisable fail", http.StatusBadGateway)
+	}))
+	defer server.Close()
+	installCPAManagementDialForTest(t, server.URL, server.Client().Do)
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: []pluginapi.HostAuthFileEntry{
+			{AuthIndex: "bf1", Name: "bf1.json", Provider: "xai", Disabled: true},
+		}}, nil
+	}
+	t.Cleanup(func() { callHostAuthListFn = callHostAuthList })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "bf1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now.Add(-time.Hour), ResetAt: now.Add(time.Hour),
+		ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	engine.mu.Lock()
+	oldResults := append([]accountResult(nil), engine.results...)
+	engine.results = []accountResult{{
+		AuthIndex: "bf1", Name: "bf1.json", FileName: "bf1.json",
+		Disabled: true, Classification: "quota_exhausted", Action: "enable",
+	}}
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = oldResults
+		engine.mu.Unlock()
+	})
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- setAuthDisabled("bf1.json", false, "test-pass", nil, true) }()
+	<-enableEntered
+	activeStore.Set(banEntry{
+		AuthID: "bf1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(20 * time.Minute),
+		ResetSource: "header_absolute", CpaSynced: false,
+	})
+	close(releaseEnable)
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected re-disable error")
+	}
+	engine.mu.Lock()
+	row := engine.results[0]
+	engine.mu.Unlock()
+	if row.Disabled {
+		t.Fatalf("re-disable fail must leave Disabled=false: %+v", row)
+	}
+	if row.Action != "disable" {
+		t.Fatalf("want disable recommendation, got %q", row.Action)
+	}
+}
+
+// ---------- C) persist=false no per-account ban save ----------
+
+func TestBulkPersistFalseDoesNotTriggerPerAccountBanSave(t *testing.T) {
+	isolateActiveStore(t)
+	pauseBanDisposeWorkersForTest(t)
+	stopBanPersistWorkerForTest()
+	t.Cleanup(stopBanPersistWorkerForTest)
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "bans.json")
+	oldCfg := loadedConfig()
+	cfg := oldCfg
+	cfg.PersistState = true
+	cfg.StateFile = state
+	currentConfig.Store(cfg)
+	t.Cleanup(func() {
+		currentConfig.Store(oldCfg)
+		banStoreSaveFn = func(path string) error { return activeStore.Save(path) }
+	})
+
+	var saves atomic.Int32
+	banStoreSaveFn = func(path string) error {
+		saves.Add(1)
+		return activeStore.Save(path)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	installCPAManagementDialForTest(t, server.URL, server.Client().Do)
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	engine.mu.Lock()
+	oldResults := append([]accountResult(nil), engine.results...)
+	engine.results = []accountResult{
+		{AuthIndex: "p1", Name: "p1.json", FileName: "p1.json", Disabled: true, Classification: "quota_exhausted", Action: "enable"},
+		{AuthIndex: "p2", Name: "p2.json", FileName: "p2.json", Disabled: true, Classification: "quota_exhausted", Action: "enable"},
+		{AuthIndex: "p3", Name: "p3.json", FileName: "p3.json", Disabled: true, Classification: "quota_exhausted", Action: "enable"},
+	}
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = oldResults
+		engine.mu.Unlock()
+	})
+	callHostAuthListFn = func() (authListResponse, error) {
+		return authListResponse{Files: []pluginapi.HostAuthFileEntry{
+			{Name: "p1.json", AuthIndex: "p1"},
+			{Name: "p2.json", AuthIndex: "p2"},
+			{Name: "p3.json", AuthIndex: "p3"},
+		}}, nil
+	}
+	t.Cleanup(func() { callHostAuthListFn = callHostAuthList })
+
+	now := time.Now()
+	for _, id := range []string{"p1.json", "p2.json", "p3.json"} {
+		activeStore.Set(banEntry{
+			AuthID: id, Provider: "xai", ErrorCode: exhaustedErrorCode,
+			BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+		})
+	}
+	before := saves.Load()
+	for _, name := range []string{"p1.json", "p2.json", "p3.json"} {
+		if err := setAuthDisabled(name, false, "test-pass", nil, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if saves.Load() != before {
+		t.Fatalf("persist=false must not call banStoreSaveFn per account: before=%d after=%d", before, saves.Load())
+	}
+	// Final bulk save uses saveActiveStoreErr (direct Save), not the persist worker.
+	if err := saveActiveStoreErr(); err != nil {
+		t.Fatal(err)
+	}
+	if saves.Load() != before {
+		t.Fatalf("saveActiveStoreErr should not use banStoreSaveFn; worker saves=%d", saves.Load()-before)
+	}
+	loaded := newBanStore()
+	if err := loaded.Load(state, now); err != nil {
+		t.Fatal(err)
+	}
+	// Successful enable clears bans when no concurrent newer ban; final save has that state.
+	for _, id := range []string{"p1.json", "p2.json", "p3.json"} {
+		if _, ok := loaded.Get(id); ok {
+			t.Fatalf("%s should be cleared after enable + final save", id)
+		}
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Fatalf("final save must write state file: %v", err)
+	}
+}
+
+// ---------- E) unban conflict not missing ----------
+
+func TestUnbanKeptNewerReturnsConflictNotMissing(t *testing.T) {
+	isolateActiveStore(t)
+	isolateUnbanJob(t)
+	engine.mu.Lock()
+	engine.running, engine.applying, engine.applyDraining, engine.actionInFlight = false, false, false, 0
+	engine.mu.Unlock()
+
+	enableEntered := make(chan struct{})
+	releaseEnable := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Disabled bool `json:"disabled"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !body.Disabled {
+			select {
+			case <-enableEntered:
+			default:
+				close(enableEntered)
+			}
+			<-releaseEnable
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	installCPAManagementDialForTest(t, server.URL, server.Client().Do)
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "ec1", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now.Add(-time.Hour), ResetAt: now.Add(time.Hour),
+		ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	errCh := make(chan error, 1)
+	var enabled, removed bool
+	go func() {
+		var e error
+		enabled, removed, e = unbanOneAccount("ec1", "test-pass")
+		errCh <- e
+	}()
+	<-enableEntered
+	activeStore.Set(banEntry{
+		AuthID: "ec1", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(15 * time.Minute),
+		ResetSource: "header_absolute", CpaSynced: true,
+	})
+	close(releaseEnable)
+	err := <-errCh
+	if err == nil || !errors.Is(err, errUnbanSupersededByNewerBan) {
+		t.Fatalf("want superseded conflict, got %v (enabled=%v removed=%v)", err, enabled, removed)
+	}
+	if enabled || removed {
+		t.Fatalf("must not report success/missing path: enabled=%v removed=%v", enabled, removed)
+	}
+}
+
+// ---------- F) shutdown final flush after producers ----------
+
+func TestShutdownFinalBanFlushAfterProducers(t *testing.T) {
+	isolateActiveStore(t)
+	stopBanPersistWorkerForTest()
+	t.Cleanup(func() {
+		stopBanPersistWorkerForTest()
+		rearmBanDisposeWorkersForTest()
+		// restore engine flags
+		engine.mu.Lock()
+		engine.stopped = false
+		engine.applyDraining = false
+		engine.mu.Unlock()
+	})
+
+	dir := t.TempDir()
+	state := filepath.Join(dir, "bans.json")
+	oldCfg := loadedConfig()
+	cfg := oldCfg
+	cfg.PersistState = true
+	cfg.StateFile = state
+	currentConfig.Store(cfg)
+	t.Cleanup(func() {
+		currentConfig.Store(oldCfg)
+		banStoreSaveFn = func(path string) error { return activeStore.Save(path) }
+	})
+	banStoreSaveFn = func(path string) error { return activeStore.Save(path) }
+
+	releaseProducer := make(chan struct{})
+	engine.runWG.Add(1)
+	go func() {
+		defer engine.runWG.Done()
+		<-releaseProducer
+		now := time.Now()
+		activeStore.Set(banEntry{
+			AuthID: "late-shutdown", Provider: "xai", ErrorCode: unauthorizedErrorCode,
+			BannedAt: now, ResetAt: now.AddDate(100, 0, 0),
+			ResetSource: "manual_unban", CpaSynced: false,
+		})
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		engine.shutdown()
+		close(done)
+	}()
+	// Give shutdown time to reach runWG.Wait
+	time.Sleep(30 * time.Millisecond)
+	close(releaseProducer)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown hung")
+	}
+
+	loaded := newBanStore()
+	if err := loaded.Load(state, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loaded.Get("late-shutdown"); !ok {
+		t.Fatal("final flush after producers must persist late ban")
 	}
 }

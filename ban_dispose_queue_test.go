@@ -13,6 +13,13 @@ func resetBanDisposeQueueForTest(t interface {
 	t.Helper()
 	q := globalBanDispose
 	q.mu.Lock()
+	// Production stopBanDisposeWorkers leaves stopping=true with workers exited.
+	// Rearm so later enqueue/capacity tests are not poisoned by shutdown tests.
+	if q.stopping {
+		q.stopping = false
+		q.started = false
+		q.inFlight = 0
+	}
 	wasHold := q.testHold
 	wasNoStart := q.testNoStart
 	q.testHold = true
@@ -40,6 +47,11 @@ func resetBanDisposeQueueForTest(t interface {
 	q.mu.Unlock()
 	t.Cleanup(func() {
 		q.mu.Lock()
+		if q.stopping {
+			q.stopping = false
+			q.started = false
+			q.inFlight = 0
+		}
 		hold := q.testHold
 		noStart := q.testNoStart
 		q.testHold = true
@@ -75,6 +87,11 @@ func pauseBanDisposeWorkersForTest(t interface {
 	t.Helper()
 	q := globalBanDispose
 	q.mu.Lock()
+	if q.stopping {
+		q.stopping = false
+		q.started = false
+		q.inFlight = 0
+	}
 	q.testHold = true
 	q.testNoStart = true
 	q.cond.Broadcast()
@@ -91,6 +108,12 @@ func pauseBanDisposeWorkersForTest(t interface {
 	}
 	t.Cleanup(func() {
 		q.mu.Lock()
+		// Keep queue usable after tests that stopped workers mid-suite.
+		if q.stopping {
+			q.stopping = false
+			q.started = false
+			q.inFlight = 0
+		}
 		q.testHold = false
 		q.testNoStart = false
 		q.cond.Broadcast()
@@ -105,6 +128,11 @@ func markBanDisposeQueueFullForTest(t interface {
 	q := globalBanDispose
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.stopping {
+		q.stopping = false
+		q.started = false
+		q.inFlight = 0
+	}
 	for i := 0; i < q.capacity; i++ {
 		if q.queued >= q.capacity {
 			break
@@ -153,6 +181,11 @@ func freezeAndWaitBanDisposeIdleForTest(t interface {
 func unfreezeBanDisposeWorkersForTest() {
 	q := globalBanDispose
 	q.mu.Lock()
+	if q.stopping {
+		q.stopping = false
+		q.started = false
+		q.inFlight = 0
+	}
 	q.testHold = false
 	q.testNoStart = false
 	q.cond.Broadcast()
@@ -163,7 +196,7 @@ func banDisposePendingCountForTest() int { return globalBanDispose.pendingCount(
 func banDisposeQueuedCountForTest() int  { return globalBanDispose.queuedCount() }
 
 // installCPAManagementDialForTest swaps management dial under lock. Cleanup freezes
-// ban dispose workers until idle, then restores dial — safe for Usage/async disable tests.
+// ban dispose workers until idle, then restores dial - safe for Usage/async disable tests.
 func installCPAManagementDialForTest(t interface {
 	Helper()
 	Cleanup(func())

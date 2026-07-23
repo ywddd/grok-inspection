@@ -123,14 +123,20 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 		} else {
 			// CAS + optional re-disable MUST NOT hold engine.mu (Management HTTP).
 			var removed int
-			var stillBanned bool
+			var localBanRemains bool
+			var cpaDisabledOK bool
 			var storeChanged bool
-			removed, stillBanned, storeChanged, errCAS = clearBansMatchingTargetCAS(activeStore, target, name, pre)
+			removed, localBanRemains, cpaDisabledOK, storeChanged, errCAS = clearBansMatchingTargetCAS(activeStore, target, name, pre)
 			_ = removed
-			// storeChanged covers deletes and CpaSynced/CpaSyncError updates on re-disable.
 			banStateChanged = storeChanged
-			// Final result row follows CAS outcome, not the optimistic enable PATCH.
-			resultDisabled = stillBanned
+			// Only mark the row disabled when a local ban remains AND CPA re-disable
+			// succeeded. If re-disable failed, CPA may still be enabled: keep
+			// Disabled=false so recommendAction still suggests disable, and return err.
+			if localBanRemains && cpaDisabledOK && errCAS == nil {
+				resultDisabled = true
+			} else {
+				resultDisabled = false
+			}
 			engine.mu.Lock()
 			for i := range engine.results {
 				item := &engine.results[i]
@@ -145,13 +151,12 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 			}
 			engine.mu.Unlock()
 		}
-		if banStateChanged {
-			// Always coalesce to disk (bulk persist=false still must not drop sync state).
+		if banStateChanged && persist {
+			// Single-account path: mark + sync save for retry visibility.
+			// Bulk apply uses persist=false and relies on runApply's final saveActiveStoreErr.
 			markBanStoreDirty()
-			if persist {
-				if err := saveActiveStoreErr(); err != nil {
-					return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
-				}
+			if err := saveActiveStoreErr(); err != nil {
+				return fmt.Errorf("updated in CPA but failed to persist ban state: %w", err)
 			}
 		}
 		return errCAS
@@ -332,42 +337,80 @@ func banIDMatchesAliases(authID string, aliases map[string]struct{}) bool {
 // clearBansMatchingTargetCAS deletes only bans whose revision still matches the
 // pre-mutation snapshot. Newer revisions are kept and re-disabled in CPA.
 // Must not be called while holding engine.mu (performs Management HTTP).
-// stillBanned is true when any matching ban remains after CAS (caller should
-// reflect Disabled=true on inspection results).
-func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileEntry, name string, pre []banEntry) (removed int, stillBanned bool, storeChanged bool, err error) {
+//
+//	localBanRemains: at least one matching ban still in the store after CAS
+//	cpaDisabledOK: every remaining ban was successfully re-disabled in CPA
+//	               (true when no remaining bans either)
+func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileEntry, name string, pre []banEntry) (removed int, localBanRemains bool, cpaDisabledOK bool, storeChanged bool, err error) {
 	if store == nil {
-		return 0, false, false, nil
+		return 0, false, true, false, nil
 	}
 	preByID := map[string]uint64{}
 	for _, e := range pre {
 		preByID[e.AuthID] = e.Revision
 	}
 	var firstErr error
+	reDisableOK := true
 	for _, entry := range store.All() {
 		if !banIDMatchesAliases(entry.AuthID, banAliases(target, name)) {
 			continue
 		}
-		if oldRev, ok := preByID[entry.AuthID]; ok && entry.Revision == oldRev {
-			if store.DeleteIf(entry.AuthID, oldRev) {
-				removed++
-				storeChanged = true
+		expected, inPre := preByID[entry.AuthID]
+		if !inPre {
+			// Not in the pre-enable snapshot: concurrent ban — re-disable.
+			if errRD := redisableKeptBan(store, entry.AuthID); errRD != nil {
+				reDisableOK = false
+				if firstErr == nil {
+					firstErr = errRD
+				}
 			}
+			localBanRemains = true
+			storeChanged = true
 			continue
 		}
-		// Newer ban landed during enable: re-disable and keep local state.
-		// CpaSynced/CpaSyncError updates are store changes even when removed==0.
-		stillBanned = true
-		storeChanged = true
-		if errDisable := disableAuthInCPA(entry.AuthID); errDisable != nil {
-			store.UpdateCpaSyncState(entry.AuthID, false, sanitizeCPASyncError(errDisable))
-			if firstErr == nil {
-				firstErr = errDisable
-			}
-		} else {
-			store.UpdateCpaSyncState(entry.AuthID, true, "")
+		// Atomic: delete only if still expectedRev; otherwise get live newer entry.
+		deleted, current, present := store.DeleteIfOrCurrent(entry.AuthID, expected)
+		if deleted {
+			removed++
+			storeChanged = true
+			continue
 		}
+		if !present {
+			// Concurrently removed (e.g. another unban/restore) — nothing to re-disable.
+			continue
+		}
+		// DeleteIf failed because revision moved: re-disable the live ban.
+		_ = current
+		if errRD := redisableKeptBan(store, entry.AuthID); errRD != nil {
+			reDisableOK = false
+			if firstErr == nil {
+				firstErr = errRD
+			}
+		}
+		localBanRemains = true
+		storeChanged = true
 	}
-	return removed, stillBanned, storeChanged, firstErr
+	if !localBanRemains {
+		return removed, false, true, storeChanged, firstErr
+	}
+	return removed, true, reDisableOK && firstErr == nil, storeChanged, firstErr
+}
+
+// redisableKeptBan re-disables a retained ban in CPA and records sync state.
+func redisableKeptBan(store *banStore, authID string) error {
+	if store == nil {
+		return nil
+	}
+	authID = strings.TrimSpace(authID)
+	if authID == "" {
+		return nil
+	}
+	if errDisable := disableAuthInCPA(authID); errDisable != nil {
+		store.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
+		return errDisable
+	}
+	store.UpdateCpaSyncState(authID, true, "")
+	return nil
 }
 
 func (e *inspectionEngine) removeResultLocked(target *pluginapi.HostAuthFileEntry, name string) {

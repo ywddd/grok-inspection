@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -174,6 +175,12 @@ func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (r
 // Claims the unban slot for the entire host call so inspection/bulk ops cannot
 // start mid-flight.
 func unbanOneAccount(authID, password string) (enabled bool, removed bool, err error) {
+	return unbanOneAccountWithOrigin(authID, password, nil)
+}
+
+// unbanOneAccountWithOrigin is the operator unban path. originHeaders must be a
+// detached Origin-only map (or nil); never pass the live request header map.
+func unbanOneAccountWithOrigin(authID, password string, originHeaders http.Header) (enabled bool, removed bool, err error) {
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
 		return false, false, fmt.Errorf("missing_auth_id")
@@ -183,6 +190,8 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 		return false, false, errClaim
 	}
 	defer releaseUnbanSlot(runID)
+	// Detach Origin-only context; never retain a live request header map.
+	originHeaders = managementOriginOnlyHeaders(originHeaders)
 
 	entry, hadEntry := activeStore.Get(authID)
 	expectedRev := entry.Revision
@@ -191,7 +200,7 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 	var errRedisable error
 	_ = withAuthOp(authID, func() error {
 		var en bool
-		en, errEnable = enableAuthInCPAAllowMissing(authID, password)
+		en, errEnable = enableAuthInCPAAllowMissingWithOrigin(authID, password, originHeaders)
 		if errEnable != nil {
 			return errEnable
 		}
@@ -259,6 +268,12 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 // startUnbanJob unbans selected accounts asynchronously.
 // authIDs take priority; otherwise category filters the ban pool; empty = all.
 func startUnbanJob(authIDs []string, category, password string) error {
+	return startUnbanJobWithOrigin(authIDs, category, password, nil)
+}
+
+// startUnbanJobWithOrigin snapshots a detached Origin-only context before the
+// async worker starts so request header maps can be mutated after return.
+func startUnbanJobWithOrigin(authIDs []string, category, password string, originHeaders http.Header) error {
 	category = strings.ToLower(strings.TrimSpace(category))
 	wanted := make(map[string]struct{})
 	for _, id := range authIDs {
@@ -298,6 +313,8 @@ func startUnbanJob(authIDs []string, category, password string) error {
 		return errClaim
 	}
 	password = strings.TrimSpace(password)
+	// Detach and re-normalize before the goroutine; never retain the caller map.
+	originHeaders = managementOriginOnlyHeaders(originHeaders)
 
 	go func() {
 		defer unbanJob.wg.Done()
@@ -329,7 +346,7 @@ func startUnbanJob(authIDs []string, category, password string) error {
 			var errRedisable error
 			var removed bool
 			_ = withAuthOp(target.authID, func() error {
-				enabled, errEnable = enableAuthInCPAAllowMissing(target.authID, password)
+				enabled, errEnable = enableAuthInCPAAllowMissingWithOrigin(target.authID, password, originHeaders)
 				if errEnable != nil {
 					return errEnable
 				}

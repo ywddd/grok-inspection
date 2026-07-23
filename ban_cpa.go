@@ -17,14 +17,26 @@ func disableAuthInCPA(authID string) error {
 }
 
 func enableAuthInCPA(authID string, password string) error {
-	return setAuthDisabledInCPA(authID, false, password)
+	return enableAuthInCPAWithOrigin(authID, password, nil)
+}
+
+// enableAuthInCPAWithOrigin re-enables an account, optionally carrying a
+// detached Origin-only header map for management transport fallback.
+func enableAuthInCPAWithOrigin(authID string, password string, originHeaders http.Header) error {
+	return setAuthDisabledInCPAWithOrigin(authID, false, password, originHeaders)
 }
 
 // enableAuthInCPAAllowMissing re-enables an account. If the auth file is already
 // gone from CPA, it returns enabled=false with a nil error so callers can drop
 // the local ban record.
 func enableAuthInCPAAllowMissing(authID string, password string) (enabled bool, err error) {
-	err = enableAuthInCPA(authID, password)
+	return enableAuthInCPAAllowMissingWithOrigin(authID, password, nil)
+}
+
+// enableAuthInCPAAllowMissingWithOrigin is the Origin-aware enable used by
+// operator unban paths. Background auto-restore keeps the nil-header wrapper.
+func enableAuthInCPAAllowMissingWithOrigin(authID string, password string, originHeaders http.Header) (enabled bool, err error) {
+	err = enableAuthInCPAWithOrigin(authID, password, originHeaders)
 	if err == nil {
 		return true, nil
 	}
@@ -48,6 +60,13 @@ func isAuthFileNotFoundError(err error) bool {
 }
 
 func setAuthDisabledInCPA(authID string, disabled bool, password string) error {
+	return setAuthDisabledInCPAWithOrigin(authID, disabled, password, nil)
+}
+
+// setAuthDisabledInCPAWithOrigin patches auth disabled state. originHeaders must
+// be Origin-only (or nil); secrets are never read from that map for the Bearer
+// token (password is passed separately).
+func setAuthDisabledInCPAWithOrigin(authID string, disabled bool, password string, originHeaders http.Header) error {
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
 		return fmt.Errorf("auth_id is required")
@@ -67,7 +86,7 @@ func setAuthDisabledInCPA(authID string, disabled bool, password string) error {
 	if errMarshal != nil {
 		return errMarshal
 	}
-	_, raw, err := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, nil)
+	_, raw, err := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, originHeaders)
 	if err != nil {
 		if isAuthFileNotFoundError(err) || isAuthFileNotFoundResponse(0, raw) {
 			return fmt.Errorf("%w: %s", errAuthFileNotFound, strings.TrimSpace(string(raw)))

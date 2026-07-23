@@ -249,7 +249,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing_auth_id", "ok": false})
 		}
 		password := resolveManagementPassword(req.Headers)
-		enabled, removed, errUnban := unbanOneAccount(authID, password)
+		// Origin-only snapshot for CPA dial fallback; password stays separate.
+		originHeaders := managementOriginOnlyHeaders(req.Headers)
+		enabled, removed, errUnban := unbanOneAccountWithOrigin(authID, password, originHeaders)
 		if errUnban != nil {
 			status := http.StatusBadRequest
 			msg := errUnban.Error()
@@ -339,6 +341,8 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban-all"):
 		// Async bulk unban so large ban pools do not block the Management handler.
 		password := resolveManagementPassword(req.Headers)
+		// Snapshot Origin before returning; worker must not retain req.Headers.
+		originHeaders := managementOriginOnlyHeaders(req.Headers)
 		var body struct {
 			Category string   `json:"category"`
 			AuthIDs  []string `json:"auth_ids"`
@@ -348,7 +352,7 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
 			}
 		}
-		if err := startUnbanJob(body.AuthIDs, body.Category, password); err != nil {
+		if err := startUnbanJobWithOrigin(body.AuthIDs, body.Category, password, originHeaders); err != nil {
 			status := http.StatusConflict
 			if strings.Contains(err.Error(), "no accounts") {
 				status = http.StatusBadRequest

@@ -216,6 +216,17 @@ func requestManagementBaseURL(headers http.Header) string {
 	return normalizeHTTPOrigin(headerValue(headers, "Origin"))
 }
 
+// managementOriginOnlyHeaders returns a detached header map containing only a
+// normalized Origin value for management transport fallback. Authorization,
+// Cookie, and other secrets are never copied. Safe for async workers.
+func managementOriginOnlyHeaders(headers http.Header) http.Header {
+	origin := requestManagementBaseURL(headers)
+	if origin == "" {
+		return nil
+	}
+	return http.Header{"Origin": []string{origin}}
+}
+
 func configuredManagementBaseURL() (string, bool) {
 	if value := firstNonEmpty(os.Getenv("CPA_MANAGEMENT_BASE_URL"), os.Getenv("CPA_BASE_URL")); value != "" {
 		return strings.TrimRight(strings.TrimSpace(value), "/"), true

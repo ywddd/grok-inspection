@@ -668,7 +668,7 @@ func renderUIPage(pluginID string) []byte {
       schedule_403_action:'403 处理', schedule_action_disable:'禁用', schedule_action_delete:'删除', schedule_save:'保存自动巡检',
       schedule_loading:'自动巡检状态加载中…', schedule_disabled:'自动巡检已关闭', schedule_waiting:'等待下次巡检',
       schedule_running:'自动巡检进行中', schedule_completed:'上次自动巡检已完成', schedule_skipped:'上次自动巡检因任务繁忙跳过',
-      schedule_action_failed:'自动处置失败', schedule_completed_errors:'上次自动巡检完成，但部分处置失败',
+      schedule_action_failed:'自动处置失败', schedule_completed_errors:'上次自动巡检完成，但部分处置失败', schedule_failed:'上次自动巡检失败', schedule_stopped:'上次自动巡检已停止',
       schedule_next:'下次：', schedule_last:'上次：', schedule_counts:'403：', schedule_disabled_count:'，禁用：', schedule_deleted_count:'，删除：', schedule_failed_count:'，失败：',
       schedule_key_missing:'后台处置缺少 Management Key', schedule_saved:'自动巡检设置已保存',
       schedule_delete_confirm_title:'确认自动删除 403 账号', schedule_delete_confirm_body:'后续自动巡检会删除明确返回 permission-denied 的 403 账号，此操作不可恢复。确认保存？',
@@ -807,7 +807,7 @@ func renderUIPage(pluginID string) []byte {
       schedule_403_action:'403 action', schedule_402_action:'402 action', schedule_action_disable:'Disable', schedule_action_delete:'Delete', schedule_save:'Save schedule',
       schedule_loading:'Loading scheduled inspection…', schedule_disabled:'Scheduled inspection is off', schedule_waiting:'Waiting for next inspection',
       schedule_running:'Scheduled inspection is running', schedule_completed:'Last scheduled inspection completed', schedule_skipped:'Last scheduled inspection was skipped because another task was busy',
-      schedule_action_failed:'Automatic action failed', schedule_completed_errors:'Scheduled inspection completed with action failures',
+      schedule_action_failed:'Automatic action failed', schedule_completed_errors:'Scheduled inspection completed with action failures', schedule_failed:'Last scheduled inspection failed', schedule_stopped:'Last scheduled inspection was stopped',
       schedule_next:'Next: ', schedule_last:'Last: ', schedule_counts:'403: ', schedule_counts_402:'402: ', schedule_disabled_count:', disabled: ', schedule_deleted_count:', deleted: ', schedule_failed_count:', failed: ',
       schedule_key_missing:'Management Key unavailable for background actions', schedule_saved:'Scheduled inspection settings saved',
       schedule_delete_confirm_title:'Confirm automatic deletion of 403 accounts', schedule_delete_confirm_body:'Future scheduled inspections will delete accounts that explicitly return 403 permission-denied. This cannot be undone. Save this setting?',
@@ -1872,6 +1872,9 @@ func renderUIPage(pluginID string) []byte {
     if (data.enabled === false) return t('schedule_disabled');
     const status = String(data.last_status || 'waiting');
     let text = status === 'running' ? t('schedule_running')
+      : status === 'completed' ? t('schedule_completed')
+      : status === 'failed' ? t('schedule_failed')
+      : status === 'stopped' ? t('schedule_stopped')
       : status === 'action_failed' ? t('schedule_action_failed')
       : status === 'completed_with_errors' ? t('schedule_completed_errors')
       : status === 'skipped' ? t('schedule_skipped')

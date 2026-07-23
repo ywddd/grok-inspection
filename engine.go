@@ -529,44 +529,49 @@ func (e *inspectionEngine) recordRowActionLocked(seq uint64, key, action string,
 }
 
 func (e *inspectionEngine) start(req startRequest) error {
+	_, err := e.startWithRunID(req)
+	return err
+}
+
+func (e *inspectionEngine) startWithRunID(req startRequest) (uint64, error) {
 	lang := normalizeLang(req.Lang)
 	workers, errWorkers := normalizeWorkersLocalized(req.Workers, lang)
 	if errWorkers != nil {
-		return errWorkers
+		return 0, errWorkers
 	}
 	classifications := normalizeClassifications(req.Classifications)
 	classifyScoped := len(classifications) > 0
 	if classifyScoped && req.Incremental {
-		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_with_incremental")))
+		return 0, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_with_incremental")))
 	}
 
 	e.mu.Lock()
 	if e.shuttingDown {
 		e.mu.Unlock()
-		return httpErr(http.StatusServiceUnavailable, fmt.Errorf("%s", T(lang, "busy_generic")))
+		return 0, httpErr(http.StatusServiceUnavailable, fmt.Errorf("%s", T(lang, "busy_generic")))
 	}
 	if e.running || e.applying || e.applyDraining {
 		e.mu.Unlock()
-		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "already_running")))
+		return 0, httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "already_running")))
 	}
 	if e.actionInFlight > 0 {
 		e.mu.Unlock()
-		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_row_action")))
+		return 0, httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_row_action")))
 	}
 	unbanJob.mu.Lock()
 	unbanBusy := unbanJob.running
 	unbanJob.mu.Unlock()
 	if unbanBusy {
 		e.mu.Unlock()
-		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
+		return 0, httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
 	}
 	if req.Incremental && len(e.results) == 0 {
 		e.mu.Unlock()
-		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "incremental_needs_results")))
+		return 0, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "incremental_needs_results")))
 	}
 	if classifyScoped && len(e.results) == 0 {
 		e.mu.Unlock()
-		return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_needs_results")))
+		return 0, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "category_needs_results")))
 	}
 	if classifyScoped {
 		matched := 0
@@ -578,7 +583,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 		}
 		if matched == 0 {
 			e.mu.Unlock()
-			return httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "no_accounts_in_category")))
+			return 0, httpErr(http.StatusBadRequest, fmt.Errorf("%s", T(lang, "no_accounts_in_category")))
 		}
 	}
 	includeDisabled := req.IncludeDisabled
@@ -627,7 +632,7 @@ func (e *inspectionEngine) start(req startRequest) error {
 		defer e.runWG.Done()
 		e.run(runID, workers, includeDisabled, onlyDisabled, incremental, classifications)
 	}()
-	return nil
+	return runID, nil
 }
 
 // stop aborts the job immediately for the UI (legacy/internal entrypoint).
@@ -876,11 +881,27 @@ func (e *inspectionEngine) noteRunListOutcome(runID uint64, ok bool, errMsg stri
 	}
 }
 
-// latestRunID returns the current engine run token (for schedule wait/match).
+// latestRunID returns the current engine run token (tests / diagnostics).
 func (e *inspectionEngine) latestRunID() uint64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.runID
+}
+
+// inspectionRunWaitState reports progress for a specific run token:
+//   - "running": this run is the active inspection
+//   - "finished": this run completed via finish (outcome published under runID)
+//   - "superseded": this run was stopped/aborted or replaced; do not follow a newer run
+func (e *inspectionEngine) inspectionRunWaitState(runID uint64) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastFinishedRunID == runID {
+		return "finished"
+	}
+	if e.runID == runID && e.running {
+		return "running"
+	}
+	return "superseded"
 }
 
 // finishedRunOutcome returns the published outcome for a completed runID.

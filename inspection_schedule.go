@@ -76,6 +76,9 @@ type inspectionScheduleUpdate struct {
 	SpendingLimitAction    *string `json:"spending_limit_action"`
 }
 
+// afterScheduledStartHook is optional test-only; production keeps nil.
+var afterScheduledStartHook func(runID uint64)
+
 var inspectionScheduleRuntime = struct {
 	once     sync.Once
 	stopOnce sync.Once
@@ -369,13 +372,17 @@ const (
 func runScheduledInspection(cfg persistedInspectionSchedule) {
 	started := time.Now()
 	setInspectionScheduleRuntimeStatus("running", "", started, scheduleRunStats{})
-	if err := engine.start(scheduledInspectionRequest(cfg)); err != nil {
-		setInspectionScheduleRuntimeStatus("skipped", err.Error(), started, scheduleRunStats{})
+	expectedRunID, errStart := engine.startWithRunID(scheduledInspectionRequest(cfg))
+	if errStart != nil {
+		setInspectionScheduleRuntimeStatus("skipped", errStart.Error(), started, scheduleRunStats{})
 		return
 	}
-	// Capture this run's token immediately after start (no concurrent start while running).
-	expectedRunID := engine.latestRunID()
+	// Test hook: runs after the scheduled run token is known, before wait loop.
+	if afterScheduledStartHook != nil {
+		afterScheduledStartHook(expectedRunID)
+	}
 
+	// Wait only for this run token. Do not follow a newer manual run via global Running.
 	for {
 		select {
 		case <-inspectionScheduleRuntime.stop:
@@ -383,14 +390,19 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 			return
 		case <-time.After(250 * time.Millisecond):
 		}
-		snap := engine.snapshot(false)
-		if !snap.Running {
-			if snap.Stopped {
-				setInspectionScheduleRuntimeStatus("stopped", "", started, scheduleRunStats{})
-				return
-			}
-			break
+		switch engine.inspectionRunWaitState(expectedRunID) {
+		case "running":
+			continue
+		case "finished":
+			// fall through to listOK / auto-action gate
+		case "superseded":
+			setInspectionScheduleRuntimeStatus("stopped", "scheduled inspection run was stopped or superseded", started, scheduleRunStats{})
+			return
+		default:
+			setInspectionScheduleRuntimeStatus("stopped", "scheduled inspection run was stopped or superseded", started, scheduleRunStats{})
+			return
 		}
+		break
 	}
 
 	// Only act on this run's published outcome. Stale 402/403 rows from a prior

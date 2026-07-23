@@ -303,6 +303,14 @@ func TestWaitHostCallsZeroTimeoutWaitsForRelease(t *testing.T) {
 	for hostCallInflight() > 0 {
 		releaseHostCall()
 	}
+	// Prior shutdown tests leave admission closed; re-open before acquire.
+	rearmHostCallAdmissionForTest()
+	t.Cleanup(func() {
+		for hostCallInflight() > 0 {
+			releaseHostCall()
+		}
+		rearmHostCallAdmissionForTest()
+	})
 	acquireHostCall()
 	done := make(chan struct{})
 	go func() {

@@ -163,16 +163,21 @@ func TestHostCallAdmissionConcurrentStressNoAddAfterWaitPanic(t *testing.T) {
 		}()
 	}
 
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		time.Sleep(1 * time.Millisecond)
 		waitHostCallsForShutdown(15 * time.Millisecond)
 	}()
 	close(start)
 	wg.Wait()
 
-	deadline := time.Now().Add(3 * time.Second)
-	for hostCallInflight() > 0 && time.Now().Before(deadline) {
-		time.Sleep(1 * time.Millisecond)
+	// Join the shutdown Wait before further Wait/rearm/Add so a leftover
+	// hostCallWG.Wait cannot race the next test's hostCallWG.Add.
+	select {
+	case <-shutdownDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stress shutdown goroutine did not finish")
 	}
 	if hostCallInflight() != 0 {
 		t.Fatalf("leftover inflight=%d", hostCallInflight())

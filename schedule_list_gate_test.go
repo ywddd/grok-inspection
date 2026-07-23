@@ -397,13 +397,17 @@ func TestStartWithRunIDReturnsTokenAtomically(t *testing.T) {
 		<-listHold
 		return authListResponse{}, errors.New("held")
 	}
+	// Release hold and wait for engine.run to exit before restoring the global
+	// function pointer; otherwise cleanup races engine.run's callHostAuthListFn read.
 	t.Cleanup(func() {
-		callHostAuthListFn = oldList
 		select {
 		case <-listHold:
 		default:
 			close(listHold)
 		}
+		engine.stopWithLang("en")
+		engine.runWG.Wait()
+		callHostAuthListFn = oldList
 	})
 
 	id, err := engine.startWithRunID(startRequest{Lang: "en", Workers: 1})
@@ -424,6 +428,7 @@ func TestStartWithRunIDReturnsTokenAtomically(t *testing.T) {
 		t.Fatalf("after stop state=%s want superseded", st)
 	}
 	close(listHold)
+	engine.runWG.Wait()
 }
 
 func TestInspectionRunWaitStateFinishedNotFollowedByNewerRun(t *testing.T) {
@@ -431,10 +436,22 @@ func TestInspectionRunWaitStateFinishedNotFollowedByNewerRun(t *testing.T) {
 	t.Cleanup(rearmEngineAfterShutdownForTest)
 
 	oldList := callHostAuthListFn
+	hold := make(chan struct{})
 	callHostAuthListFn = func() (authListResponse, error) {
 		return authListResponse{Files: nil}, nil
 	}
-	t.Cleanup(func() { callHostAuthListFn = oldList })
+	// stop/release/wait before restoring globals so engine.run cannot race
+	// cleanup's write of callHostAuthListFn.
+	t.Cleanup(func() {
+		engine.stopWithLang("en")
+		select {
+		case <-hold:
+		default:
+			close(hold)
+		}
+		engine.runWG.Wait()
+		callHostAuthListFn = oldList
+	})
 
 	id, err := engine.startWithRunID(startRequest{Lang: "en", Workers: 1})
 	if err != nil {
@@ -451,20 +468,14 @@ func TestInspectionRunWaitStateFinishedNotFollowedByNewerRun(t *testing.T) {
 		t.Fatalf("state=%s want finished", st)
 	}
 	// Start a newer run that stays running; old token must remain finished.
-	hold := make(chan struct{})
 	callHostAuthListFn = func() (authListResponse, error) {
 		<-hold
 		return authListResponse{}, errors.New("held newer")
 	}
 	newer, err := engine.startWithRunID(startRequest{Lang: "en", Workers: 1})
 	if err != nil {
-		close(hold)
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		engine.stopWithLang("en")
-		close(hold)
-	})
 	if newer == id {
 		t.Fatal("newer runID should differ")
 	}

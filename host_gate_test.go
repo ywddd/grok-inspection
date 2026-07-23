@@ -13,11 +13,18 @@ func TestHostCallGateCapacityMatchesMaxWorkers(t *testing.T) {
 }
 
 func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
-	rearmHostCallAdmissionForTest()
-	// Drain any leftover (should be empty in unit tests).
+	// Drain leftovers then re-open admission; previous shutdown tests leave
+	// hostCallShuttingDown=true and may still have Wait in flight until joined.
 	for hostCallInflight() > 0 {
 		releaseHostCall()
 	}
+	rearmHostCallAdmissionForTest()
+	t.Cleanup(func() {
+		for hostCallInflight() > 0 {
+			releaseHostCall()
+		}
+		rearmHostCallAdmissionForTest()
+	})
 
 	var started sync.WaitGroup
 	var release sync.WaitGroup

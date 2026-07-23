@@ -629,6 +629,7 @@ func TestShutdownWaitsForHostCallsAndEmitsDiagnostics(t *testing.T) {
 		}
 	}
 drained:
+	rearmHostCallAdmissionForTest()
 	acquireHostCall()
 
 	var (

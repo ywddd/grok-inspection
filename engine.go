@@ -222,7 +222,16 @@ type inspectionEngine struct {
 	runClassifyScoped bool
 	// fullClearPending: full inspect waits for list success before wiping results.
 	fullClearPending bool
-	schedule         persistedInspectionSchedule
+	// Per-run list outcome (current run). Used so finish can publish a tokenized result.
+	runIsFullInspect bool
+	runListOK        bool
+	runListError     string
+	// Last finished run outcome (runID-tokenized). Schedule auto-actions must match this.
+	lastFinishedRunID       uint64
+	lastFinishedListOK      bool
+	lastFinishedListError   string
+	lastFinishedFullInspect bool
+	schedule                persistedInspectionSchedule
 }
 
 const maxRecentRowActions = 32
@@ -591,6 +600,9 @@ func (e *inspectionEngine) start(req startRequest) error {
 	e.onlyDisabled = onlyDisabled
 	// Full inspect clears only after auth list succeeds (see run).
 	e.fullClearPending = !req.Incremental && !classifyScoped
+	e.runIsFullInspect = !req.Incremental && !classifyScoped
+	e.runListOK = false
+	e.runListError = ""
 	e.total = 0
 	e.probeDone = 0
 	e.probePhase = "listing"
@@ -837,10 +849,49 @@ func (e *inspectionEngine) finish(runID uint64) {
 	e.running = false
 	e.probePhase = "finished"
 	e.finishedAt = time.Now()
+	// Publish tokenized outcome for this completed run (schedule gates on runID).
+	e.lastFinishedRunID = runID
+	e.lastFinishedListOK = e.runListOK
+	e.lastFinishedListError = e.runListError
+	e.lastFinishedFullInspect = e.runIsFullInspect
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
 	// Final flush is synchronous so the last results survive process restart.
 	e.saveSnapshotAndRecord(snap)
+}
+
+// noteRunListOutcome records whether this run obtained the account list.
+// Only updates when runID is still current (superseded runs are ignored).
+func (e *inspectionEngine) noteRunListOutcome(runID uint64, ok bool, errMsg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.runID != runID {
+		return
+	}
+	e.runListOK = ok
+	if ok {
+		e.runListError = ""
+	} else {
+		e.runListError = strings.TrimSpace(errMsg)
+	}
+}
+
+// latestRunID returns the current engine run token (for schedule wait/match).
+func (e *inspectionEngine) latestRunID() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.runID
+}
+
+// finishedRunOutcome returns the published outcome for a completed runID.
+// found=false if a different run finished last (or none yet).
+func (e *inspectionEngine) finishedRunOutcome(runID uint64) (listOK bool, listError string, fullInspect bool, found bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastFinishedRunID != runID {
+		return false, "", false, false
+	}
+	return e.lastFinishedListOK, e.lastFinishedListError, e.lastFinishedFullInspect, true
 }
 
 // knownResultKeys builds skip-keys for incremental inspect.
@@ -886,11 +937,13 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 	if errList != nil {
 		// Keep previous results on list failure (full inspect no longer wipes early).
 		// Use a stable auth_index so repeated failures do not accumulate fake rows.
+		// Do NOT mark list OK: scheduled auto-actions must not act on stale results.
 		write := e.upsertResult
 		listReason := T(e.lang, "list_accounts_failed", errList.Error())
 		if errors.Is(errList, errListAccountsTimeout) {
 			listReason = T(e.lang, "list_accounts_timeout")
 		}
+		e.noteRunListOutcome(runID, false, listReason)
 		write(runID, accountResult{
 			AuthIndex:      "__system_list_error__",
 			Name:           "system",
@@ -900,6 +953,8 @@ func (e *inspectionEngine) run(runID uint64, workers int, includeDisabled, onlyD
 		})
 		return
 	}
+	// Account list obtained for this runID; individual probe_error later is not a list failure.
+	e.noteRunListOutcome(runID, true, "")
 
 	// Full inspect clear is deferred until runTargets are registered (same critical
 	// section), so stop between list success and target commit cannot wipe history

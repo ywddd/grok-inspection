@@ -138,6 +138,13 @@ func resetEngineAndStoresForTestIsolation() {
 	engine.applyDraining = false
 	engine.stopped = false
 	engine.shuttingDown = false
+	engine.runListOK = false
+	engine.runListError = ""
+	engine.runIsFullInspect = false
+	engine.lastFinishedRunID = 0
+	engine.lastFinishedListOK = false
+	engine.lastFinishedListError = ""
+	engine.lastFinishedFullInspect = false
 	engine.mu.Unlock()
 	// loadFromDisk now resolves under GROK_INSPECTION_DATA_DIR (empty temp).
 	engine.loadFromDisk()

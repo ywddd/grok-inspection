@@ -373,6 +373,8 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 		setInspectionScheduleRuntimeStatus("skipped", err.Error(), started, scheduleRunStats{})
 		return
 	}
+	// Capture this run's token immediately after start (no concurrent start while running).
+	expectedRunID := engine.latestRunID()
 
 	for {
 		select {
@@ -389,6 +391,26 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 			}
 			break
 		}
+	}
+
+	// Only act on this run's published outcome. Stale 402/403 rows from a prior
+	// successful inspect must not drive disable/delete when this run failed to list.
+	listOK, listError, fullInspect, found := engine.finishedRunOutcome(expectedRunID)
+	if !found {
+		setInspectionScheduleRuntimeStatus("failed", "inspection run outcome missing or superseded", started, scheduleRunStats{})
+		return
+	}
+	if !fullInspect || !listOK {
+		errMsg := listError
+		if errMsg == "" {
+			if !fullInspect {
+				errMsg = "scheduled auto-actions require a successful full inspection"
+			} else {
+				errMsg = "account list was not obtained for this run"
+			}
+		}
+		setInspectionScheduleRuntimeStatus("failed", errMsg, started, scheduleRunStats{})
+		return
 	}
 
 	stats := scheduleRunStats{}

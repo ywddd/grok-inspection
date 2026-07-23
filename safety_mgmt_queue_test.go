@@ -647,6 +647,7 @@ drained:
 		if hostCallInflight() > 0 {
 			releaseHostCall()
 		}
+		rearmHostCallAdmissionForTest()
 	})
 
 	done := make(chan struct{})

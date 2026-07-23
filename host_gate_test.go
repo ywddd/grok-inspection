@@ -13,6 +13,7 @@ func TestHostCallGateCapacityMatchesMaxWorkers(t *testing.T) {
 }
 
 func TestHostCallGateBoundsConcurrentAcquires(t *testing.T) {
+	rearmHostCallAdmissionForTest()
 	// Drain any leftover (should be empty in unit tests).
 	for hostCallInflight() > 0 {
 		releaseHostCall()

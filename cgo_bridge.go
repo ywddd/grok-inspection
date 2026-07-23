@@ -139,7 +139,9 @@ func cliproxyPluginShutdown() {
 func callHost(method string, payload any) (json.RawMessage, error) {
 	// Hold a gate slot for the entire CGO host call so soft timeouts above cannot
 	// pile up unbounded blocked OS threads when the host never returns.
-	acquireHostCall()
+	if err := tryAcquireHostCall(); err != nil {
+		return nil, err
+	}
 	defer releaseHostCall()
 
 	rawPayload, errMarshal := json.Marshal(payload)

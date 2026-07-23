@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"bytes"
@@ -11,10 +11,12 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 var (
+	managementDialMu     sync.RWMutex
 	cpaManagementBaseURL = "http://127.0.0.1:8317"
 	cpaManagementClient  = newManagementHTTPClient()
 	cpaManagementDo      = func(req *http.Request) (*http.Response, error) {
@@ -22,19 +24,94 @@ var (
 	}
 )
 
+// get/setCPAManagementDial synchronize test swaps with background dispose workers.
+func getCPAManagementBaseURL() string {
+	managementDialMu.RLock()
+	defer managementDialMu.RUnlock()
+	return cpaManagementBaseURL
+}
+
+func getCPAManagementDo() func(*http.Request) (*http.Response, error) {
+	managementDialMu.RLock()
+	defer managementDialMu.RUnlock()
+	return cpaManagementDo
+}
+
+func setCPAManagementDial(baseURL string, do func(*http.Request) (*http.Response, error)) {
+	managementDialMu.Lock()
+	defer managementDialMu.Unlock()
+	if baseURL != "" {
+		cpaManagementBaseURL = baseURL
+	}
+	if do != nil {
+		cpaManagementDo = do
+	}
+}
+
+func setCPAManagementBaseURL(baseURL string) {
+	managementDialMu.Lock()
+	cpaManagementBaseURL = baseURL
+	managementDialMu.Unlock()
+}
+
+func setCPAManagementDo(do func(*http.Request) (*http.Response, error)) {
+	managementDialMu.Lock()
+	cpaManagementDo = do
+	managementDialMu.Unlock()
+}
+
 func newManagementHTTPClient() *http.Client {
+	// Selective TLS: loopback (and explicit dangerous opt-in) may skip verify for
+	// CPA self-signed certs. Non-loopback HTTPS verifies certificates by default.
 	return &http.Client{
-		Timeout: 8 * time.Second,
-		Transport: &http.Transport{
-			// Avoid corporate/container HTTP_PROXY hijacking loopback management calls.
-			Proxy: loopbackAwareProxy,
-			// CPA local TLS often uses self-signed certs; management is key-protected.
-			TLSClientConfig: &tls.Config{
-				MinVersion:         tls.VersionTLS12,
-				InsecureSkipVerify: true, //nolint:gosec // local/self-signed management endpoint
-			},
+		Timeout:   8 * time.Second,
+		Transport: newManagementTransport(),
+	}
+}
+
+// managementRoundTripper picks an insecure or verifying transport per request host.
+type managementRoundTripper struct {
+	insecure http.RoundTripper
+	secure   http.RoundTripper
+}
+
+func newManagementTransport() http.RoundTripper {
+	insecure := &http.Transport{
+		Proxy: loopbackAwareProxy,
+		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
+			InsecureSkipVerify: true, //nolint:gosec // only used for loopback / explicit opt-in
 		},
 	}
+	secure := &http.Transport{
+		Proxy: loopbackAwareProxy,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
+	return &managementRoundTripper{insecure: insecure, secure: secure}
+}
+
+func (t *managementRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil || req.URL == nil {
+		return t.secure.RoundTrip(req)
+	}
+	host := req.URL.Hostname()
+	if managementTLSSkipVerifyForHost(host) {
+		// DANGEROUS when host is non-loopback: only via GROK_INSPECTION_INSECURE_REMOTE_TLS
+		// or CPA_MANAGEMENT_TLS_INSECURE. Remote self-signed management endpoints require
+		// that explicit opt-in; default path verifies certificates.
+		return t.insecure.RoundTrip(req)
+	}
+	return t.secure.RoundTrip(req)
+}
+
+func managementTLSConfigIsSelective(client *http.Client) bool {
+	if client == nil {
+		return false
+	}
+	_, ok := client.Transport.(*managementRoundTripper)
+	return ok
 }
 
 func loopbackAwareProxy(req *http.Request) (*url.URL, error) {
@@ -94,26 +171,6 @@ func extractBearerToken(headers http.Header) string {
 		return strings.TrimSpace(auth[len(prefix):])
 	}
 	return auth
-}
-
-func resolveManagementPassword(headers http.Header) string {
-	if headers == nil {
-		return strings.TrimSpace(cpaManagementPassword())
-	}
-	if token := extractBearerToken(headers); token != "" {
-		return token
-	}
-	if token := strings.TrimSpace(headers.Get("X-Management-Key")); token != "" {
-		return token
-	}
-	for key, values := range headers {
-		if strings.EqualFold(strings.TrimSpace(key), "X-Management-Key") && len(values) > 0 {
-			if token := strings.TrimSpace(values[0]); token != "" {
-				return token
-			}
-		}
-	}
-	return strings.TrimSpace(cpaManagementPassword())
 }
 
 func managementTLSPreferred() bool {
@@ -182,7 +239,7 @@ func resolveManagementBaseURL(headers http.Header) string {
 	if scheme == "https" {
 		return "https://127.0.0.1:8317"
 	}
-	return strings.TrimRight(cpaManagementBaseURL, "/")
+	return strings.TrimRight(getCPAManagementBaseURL(), "/")
 }
 
 type managementTransportError struct {
@@ -258,7 +315,7 @@ func executeManagementRequest(method, baseURL, path string, body []byte, passwor
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, errDo := cpaManagementDo(req)
+	resp, errDo := getCPAManagementDo()(req)
 	if errDo != nil {
 		return 0, nil, &managementTransportError{err: errDo}
 	}
@@ -314,3 +371,22 @@ func callCPAManagementWithAuth(method, path string, body []byte, password string
 
 // findAuthFromResults resolves an auth identity from the in-memory inspection
 // list without calling host.auth.list (which is O(n) over all CPA accounts).
+
+// installCPAManagementDialForTest swaps management dial under lock. Cleanup freezes
+// ban dispose workers until idle, then restores dial — safe for Usage/async disable tests.
+func installCPAManagementDialForTest(t interface {
+	Helper()
+	Cleanup(func())
+	Fatalf(string, ...any)
+}, baseURL string, do func(*http.Request) (*http.Response, error)) {
+	t.Helper()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementDial(baseURL, do)
+	t.Cleanup(func() {
+		freezeAndWaitBanDisposeIdleForTest(t)
+		setCPAManagementDial(oldBase, oldDo)
+		unfreezeBanDisposeWorkersForTest()
+	})
+}
+

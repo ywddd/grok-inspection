@@ -162,7 +162,17 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 
 	entry, hadEntry := activeStore.Get(authID)
 	expectedRev := entry.Revision
-	enabled, errEnable := enableAuthInCPAAllowMissing(authID, password)
+	var errEnable error
+	_ = withAuthOp(authID, func() error {
+		var en bool
+		en, errEnable = enableAuthInCPAAllowMissing(authID, password)
+		if errEnable != nil {
+			return errEnable
+		}
+		enabled = en
+		removed = commitUnbanAfterEnable(authID, expectedRev, hadEntry)
+		return nil
+	})
 	if errEnable != nil {
 		unbanJob.mu.Lock()
 		if unbanJob.runID == runID {
@@ -175,7 +185,6 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 		unbanJob.mu.Unlock()
 		return false, false, errEnable
 	}
-	removed = commitUnbanAfterEnable(authID, expectedRev, hadEntry)
 	unbanJob.mu.Lock()
 	if unbanJob.runID == runID {
 		if enabled {
@@ -259,10 +268,16 @@ func startUnbanJob(authIDs []string, category, password string) error {
 			unbanJob.current = target.authID
 			unbanJob.mu.Unlock()
 
-			enabled, errEnable := enableAuthInCPAAllowMissing(target.authID, password)
-			if errEnable == nil {
+			var enabled bool
+			var errEnable error
+			_ = withAuthOp(target.authID, func() error {
+				enabled, errEnable = enableAuthInCPAAllowMissing(target.authID, password)
+				if errEnable != nil {
+					return errEnable
+				}
 				_ = commitUnbanAfterEnable(target.authID, target.rev, true)
-			}
+				return nil
+			})
 			unbanJob.mu.Lock()
 			sameJob := unbanJob.runID == runID
 			if errEnable != nil {

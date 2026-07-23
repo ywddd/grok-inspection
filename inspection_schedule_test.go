@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -58,13 +60,17 @@ func TestUpdateInspectionScheduleSavesEnabledOneMinute(t *testing.T) {
 		t.Fatalf("saved schedule = %+v", cfg)
 	}
 
-	engine.waitAsyncPersist()
-	snap, err := loadPersistedSnapshot()
+	// Small schedule.json is the durable source of truth (not the large results list).
+	raw, err := os.ReadFile(scheduleFilePath())
 	if err != nil {
-		t.Fatalf("loadPersistedSnapshot() error = %v", err)
+		t.Fatalf("schedule file: %v", err)
 	}
-	if !snap.Schedule.Enabled || snap.Schedule.IntervalMinutes != 1 {
-		t.Fatalf("persisted schedule = %+v", snap.Schedule)
+	var disk persistedInspectionSchedule
+	if err := json.Unmarshal(raw, &disk); err != nil {
+		t.Fatalf("schedule json: %v", err)
+	}
+	if !disk.Enabled || disk.IntervalMinutes != 1 {
+		t.Fatalf("persisted schedule = %+v", disk)
 	}
 }
 

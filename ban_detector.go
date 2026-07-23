@@ -32,6 +32,60 @@ type banEntry struct {
 	CpaSynced bool `json:"cpa_synced"`
 	// Revision is a store-local CAS token; restore deletes only matching revision.
 	Revision uint64 `json:"revision,omitempty"`
+	// CpaSyncError is the last CPA disable/enable sync failure (never contains credentials).
+	CpaSyncError string `json:"cpa_sync_error,omitempty"`
+}
+
+
+// isContentSafetyViolation reports request-level moderation/safety blocks.
+// These must never trigger account auto-disable/delete recommendations.
+func isContentSafetyViolation(code, message string) bool {
+	blob := lower(code) + " " + lower(message)
+	return containsAny(blob,
+		"content violates usage guidelines",
+		"violates usage guidelines",
+		"safety_check",
+		"safety check",
+		"content safety",
+		"content policy",
+		"moderation",
+		"policy violation",
+		"policy_violation",
+		"blocked by safety",
+		"usage guidelines",
+	)
+}
+
+// isAccountLevelPermissionDenied requires explicit account-level permission evidence.
+// HTTP 403 + code=permission-denied alone is insufficient (WAF/safety/other 403s).
+func isAccountLevelPermissionDenied(status int, code, message string) bool {
+	if isContentSafetyViolation(code, message) {
+		return false
+	}
+	blob := lower(code) + " " + lower(message)
+	// Explicit account-level signals observed on Grok/xAI and common suspensions.
+	if containsAny(blob,
+		"access to the chat endpoint is denied",
+		"chat endpoint is denied",
+		"using the correct credentials",
+		"console.x.ai",
+		"update the permissions",
+		"contact support",
+		"console permissions",
+		"credentials",
+		"deactivated",
+		"suspended",
+		"account has been banned",
+		"account banned",
+		"account is banned",
+		"account suspended",
+		"account deactivated",
+	) {
+		return true
+	}
+	// Bare permission-denied / generic forbidden is not enough.
+	_ = status
+	return false
 }
 
 func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (banEntry, bool) {
@@ -47,12 +101,21 @@ func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (b
 
 	status := record.Failure.StatusCode
 	errorCode, hasCode := parseErrorCode(record.Failure.Body)
+	msg := parseErrorMessage(record.Failure.Body)
 	if status == http.StatusUnauthorized {
 		if !hasCode {
 			errorCode = unauthorizedErrorCode
 		}
+		// Keep diagnostic body code (authentication_error, etc.); category maps to unauthorized.
 	} else if !hasCode {
 		return banEntry{}, false
+	}
+
+	// Account auto-ban on 403 requires account-level evidence, not bare permission-denied.
+	if status == http.StatusForbidden {
+		if errorCode != permissionDeniedErrorCode || !isAccountLevelPermissionDenied(status, errorCode, msg) {
+			return banEntry{}, false
+		}
 	}
 
 	resetAt, resetSource, ok := resolveBanWindow(status, errorCode, record.ResponseHeaders, now, cfg)
@@ -142,7 +205,10 @@ func absoluteResetTime(headers http.Header) (time.Time, bool) {
 			return parsed, true
 		}
 		if unix, err := strconv.ParseInt(value, 10, 64); err == nil {
-			return time.Unix(unix, 0), true
+			parsed, ok := unixResetTime(unix, time.Now())
+			if ok {
+				return parsed, true
+			}
 		}
 	}
 	return time.Time{}, false
@@ -164,4 +230,51 @@ func retryAfterDuration(headers http.Header, now time.Time) (time.Duration, bool
 
 func firstHeader(headers http.Header, name string) string {
 	return strings.TrimSpace(headers.Get(name))
+}
+
+
+// unixResetTime accepts Unix seconds or 13-digit milliseconds.
+// Rejects absurd far-future and clearly invalid values so callers fall back.
+func unixResetTime(unix int64, now time.Time) (time.Time, bool) {
+	if unix <= 0 {
+		return time.Time{}, false
+	}
+	var t time.Time
+	// 13+ digit values are milliseconds (e.g. 1700000000000).
+	if unix >= 1_000_000_000_000 {
+		t = time.UnixMilli(unix)
+	} else {
+		t = time.Unix(unix, 0)
+	}
+	// Reject expired / equal timestamps; resolveResetAt also checks After(now).
+	if !t.After(now) {
+		return time.Time{}, false
+	}
+	// Reject absurdly far future (beyond 5 years) — likely unit confusion garbage.
+	if t.After(now.AddDate(5, 0, 0)) {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+func parseErrorMessage(body string) string {
+	var payload struct {
+		Error any `json:"error"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		return ""
+	}
+	switch v := payload.Error.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case map[string]any:
+		if m, ok := v["message"].(string); ok {
+			return strings.TrimSpace(m)
+		}
+		if m, ok := v["error"].(string); ok {
+			return strings.TrimSpace(m)
+		}
+	}
+	return strings.TrimSpace(payload.Message)
 }

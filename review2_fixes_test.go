@@ -55,15 +55,15 @@ func withCPAManagement(t *testing.T, h http.HandlerFunc) {
 	t.Helper()
 	server := httptest.NewServer(h)
 	t.Cleanup(server.Close)
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
 	t.Cleanup(func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 	})
 }

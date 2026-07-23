@@ -45,7 +45,9 @@ func handleUsageRecord(record pluginapi.UsageRecord, cfg pluginConfig, now time.
 		return banEntry{}, nil
 	}
 	// Keep local ban first so restore/UI exclude the account even if CPA PATCH fails.
+	// Must return quickly: CPA Usage Manager is single-threaded; no inline PATCH/disk.
 	entry.CpaSynced = false
+	entry.CpaSyncError = ""
 	activeStore.Set(entry)
 	entry, _ = activeStore.Get(entry.AuthID)
 	if cfg.LogMatches {
@@ -56,18 +58,22 @@ func handleUsageRecord(record pluginapi.UsageRecord, cfg pluginConfig, now time.
 			"reset_at", entry.ResetAt.Format(time.RFC3339),
 		)
 	}
-	if errDisable := disableAuthInCPA(entry.AuthID); errDisable != nil {
-		slog.Warn("grok-inspection: failed to disable auth in CPA", "auth_id", entry.AuthID, "error", errDisable)
-		activeStore.UpdateCpaSynced(entry.AuthID, false)
-	} else {
-		activeStore.UpdateCpaSynced(entry.AuthID, true)
-		entry.CpaSynced = true
+	// Bounded background queue; on full, leave unsynced for restore/retry (do not pretend success).
+	if !enqueueBanDispose(entry.AuthID, entry.Revision) {
+		slog.Warn("grok-inspection: ban dispose queue full; left unsynced",
+			"auth_id", entry.AuthID,
+		)
+		activeStore.UpdateCpaSyncState(entry.AuthID, false, "dispose queue full")
 	}
+	// Persist asynchronously so usage.handle stays non-blocking.
 	if cfg.PersistState && cfg.StateFile != "" {
-		if err := activeStore.Save(cfg.StateFile); err != nil {
-			slog.Warn("grok-inspection: failed to save ban state", "error", err)
-		}
+		go func(path string) {
+			if err := activeStore.Save(path); err != nil {
+				slog.Warn("grok-inspection: failed to save ban state", "error", err)
+			}
+		}(cfg.StateFile)
 	}
+	entry, _ = activeStore.Get(entry.AuthID)
 	return entry, nil
 }
 
@@ -84,7 +90,12 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 			continue
 		}
 		expectedRev := entry.Revision
-		if errDisable := disableAuthInCPA(entry.AuthID); errDisable != nil {
+		var errDisable error
+		_ = withAuthOp(entry.AuthID, func() error {
+			errDisable = disableAuthInCPA(entry.AuthID)
+			return nil
+		})
+		if errDisable != nil {
 			// Auth already gone from CPA: drop local ban (incl. manual 401/403) so we do not retry forever. Other errors keep the entry for the next tick.
 			if isAuthFileNotFoundError(errDisable) {
 				if store.DeleteIf(entry.AuthID, expectedRev) {
@@ -97,9 +108,10 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 				continue
 			}
 			slog.Warn("grok-inspection: retry disable auth in CPA failed", "auth_id", entry.AuthID, "error", errDisable)
+			store.UpdateCpaSyncState(entry.AuthID, false, sanitizeCPASyncError(errDisable))
 			continue
 		}
-		store.UpdateCpaSynced(entry.AuthID, true)
+		store.UpdateCpaSyncState(entry.AuthID, true, "")
 		dirty = true
 	}
 
@@ -113,7 +125,12 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 			continue
 		}
 		expectedRev := entry.Revision
-		enabled, errEnable := enableAuthInCPAAllowMissing(authID, "")
+		var enabled bool
+		var errEnable error
+		_ = withAuthOp(authID, func() error {
+			enabled, errEnable = enableAuthInCPAAllowMissing(authID, "")
+			return nil
+		})
 		if errEnable != nil {
 			failed++
 			slog.Warn("grok-inspection: failed to re-enable expired auth in CPA",
@@ -252,7 +269,11 @@ func banCategoryOf(errorCode string) string {
 		return "permission"
 	case c == spendingLimitErrorCode || strings.Contains(c, "spending-limit"):
 		return "spending_limit"
-	case c == unauthorizedErrorCode || c == "401" || strings.Contains(c, "unauthorized"):
+	case c == unauthorizedErrorCode || c == "401" || strings.Contains(c, "unauthorized") ||
+		strings.Contains(c, "authentication_error") || strings.Contains(c, "invalid_token") ||
+		strings.Contains(c, "token_expired") || strings.Contains(c, "token is expired") ||
+		strings.Contains(c, "invalid_grant") || c == "unauthenticated":
+		// Any HTTP 401 body codes still map to the 401 auth-failed category.
 		return "unauthorized"
 	case c == manualInspectionBanErrorCode || strings.Contains(c, "manual-disabled"):
 		return "manual"
@@ -308,6 +329,7 @@ func banStatus() map[string]any {
 			"reset_source":      entry.ResetSource,
 			"trace_id":          entry.TraceID,
 			"cpa_synced":        entry.CpaSynced,
+			"cpa_sync_error":    entry.CpaSyncError,
 			"pending_restore":   isPending,
 			"remaining_seconds": remain,
 		})

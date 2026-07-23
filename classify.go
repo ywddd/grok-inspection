@@ -210,13 +210,18 @@ func classifyProbe(input classifyInput) classifyResult {
 			reason := T(input.Lang, "spending_limit")
 			return classifyResult{Classification: "spending_limit", Action: action, Reason: fmt.Sprintf("%s (HTTP %d)", reason, status)}
 		}
-	} else if status == http.StatusForbidden || containsAny(blob,
-		"permission-denied",
-		"chat endpoint is denied",
-		"deactivated",
-		"suspended",
-		"banned",
-	) {
+	}
+	// Content safety / moderation: keep account, do not recommend disable/delete.
+	if isContentSafetyViolation(input.ChatCode, input.ChatError) {
+		reason := strings.TrimSpace(firstNonEmpty(input.ChatError, input.ChatCode, T(input.Lang, "probe_failed")))
+		if status > 0 {
+			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
+		}
+		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
+	}
+	// Account-level permission denial only (not bare 403 / WAF / unrelated codes).
+	// Never reclassify bare/unknown 402 via permission text heuristics.
+	if status != http.StatusPaymentRequired && isAccountLevelPermissionDenied(status, input.ChatCode, input.ChatError) {
 		action := "disable"
 		if disabled {
 			action = "keep"
@@ -226,6 +231,15 @@ func classifyProbe(input classifyInput) classifyResult {
 			reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
 		}
 		return classifyResult{Classification: "permission_denied", Action: action, Reason: reason}
+	}
+	// Bare 403 without account-level evidence: probe_error / keep.
+	if status == http.StatusForbidden {
+		reason := strings.TrimSpace(firstNonEmpty(input.ChatError, input.ChatCode, T(input.Lang, "probe_failed")))
+		if reason == "" {
+			reason = T(input.Lang, "probe_failed")
+		}
+		reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
+		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
 	}
 	if status == http.StatusNotFound || containsAny(blob, "not-found", "does not exist", "no access to it") {
 		return classifyResult{Classification: "model_unavailable", Action: "keep", Reason: T(input.Lang, "model_unavailable")}

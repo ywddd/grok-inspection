@@ -56,15 +56,15 @@ func TestUnbanSuccessDoesNotDeleteNewerBan(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
 	defer func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 	}()
 
@@ -137,15 +137,15 @@ func TestStopUnbanBlocksNewStartUntilDrain(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
 	defer func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 	}()
 
@@ -203,15 +203,15 @@ func TestSingleUnbanClaimBlocksInspectionAndBulkJobs(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
 	defer func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 	}()
 
@@ -483,15 +483,15 @@ func TestSetAuthDisabledRecalculatesAction(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
 	defer func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 	}()
 

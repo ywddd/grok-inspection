@@ -280,7 +280,12 @@ func (e *inspectionEngine) loadFromDisk() {
 		return
 	}
 	e.results = append([]accountResult(nil), snap.Results...)
-	e.schedule = normalizePersistedInspectionSchedule(snap.Schedule)
+	// Prefer small schedule.json; fall back to results.json schedule (migration).
+	if sched, errSched := loadInspectionScheduleFromDisk(); errSched == nil {
+		e.schedule = sched
+	} else {
+		e.schedule = normalizePersistedInspectionSchedule(snap.Schedule)
+	}
 	e.bumpResultsLocked()
 	if snap.Workers >= minWorkers && snap.Workers <= maxWorkers {
 		e.workers = snap.Workers
@@ -702,6 +707,8 @@ func (e *inspectionEngine) abortRunLocked() {
 }
 
 func (e *inspectionEngine) shutdown() {
+	// Stop background CPA dispose workers before waiting on other lifecycle gates.
+	stopBanDisposeWorkers()
 	stopUnbanJob()
 	e.mu.Lock()
 	e.stopped = true
@@ -716,7 +723,7 @@ func (e *inspectionEngine) shutdown() {
 	e.waitAsyncPersist()
 	// Soft-timeout probes may still hold abandoned host.http.do callbacks.
 	// Wait until they finish before clearing host/dlclose.
-	waitHostCalls(0)
+	waitHostCallsForShutdown(5 * time.Second)
 	e.mu.Lock()
 	e.applyDraining = false
 	e.mu.Unlock()

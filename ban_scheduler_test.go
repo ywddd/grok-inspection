@@ -29,16 +29,18 @@ func TestRestoreExpiredGrokBanReEnables(t *testing.T) {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer server.Close()
-	oldBaseURL := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBaseURL := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-management-password")
 	defer func() {
-		cpaManagementBaseURL = oldBaseURL
-		cpaManagementDo = oldDo
+		freezeAndWaitBanDisposeIdleForTest(t)
+		setCPAManagementBaseURL(oldBaseURL)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword)
+		unfreezeBanDisposeWorkersForTest()
 	}()
 
 	store := newBanStore()
@@ -57,25 +59,19 @@ func TestRestoreExpiredGrokBanReEnables(t *testing.T) {
 
 func TestHandleUsageRecordsExactGrokBans(t *testing.T) {
 	isolateActiveStore(t)
+	// Usage enqueues async dispose; freeze workers for assertions and race-safe dial restore.
+	pauseBanDisposeWorkersForTest(t)
+	resetBanDisposeQueueForTest(t)
 
-	// Disable CPA side-effects from usage handler in this unit test path if any.
-	// handleUsageRecord may call disableAuthInCPA; use a no-op management base.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
-	defer server.Close()
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	t.Cleanup(server.Close)
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
-	defer func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
-		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
-	}()
+	t.Cleanup(func() { _ = os.Setenv("MANAGEMENT_PASSWORD", oldPass) })
+	installCPAManagementDialForTest(t, server.URL, server.Client().Do)
 
 	record := pluginapi.UsageRecord{
 		Provider: "xai",

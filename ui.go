@@ -597,6 +597,7 @@ func renderUIPage(pluginID string) []byte {
         <button id="banUnbanAllBtn" class="danger" type="button" data-i18n="ban_unban_all">全部解禁</button>
         <span class="hint" id="banFilterHint" class="hint" data-i18n="ban_filter_hint">点击下方卡片筛选分类</span>
       </div>
+      <div id="banUnsyncedBanner" class="hint" style="display:none;margin-bottom:8px;color:var(--warn,#b45309)"></div>
       <div id="banSummary" class="summary ban-summary">
         <div class="card active" data-ban-filter="all"><div class="k" data-i18n="ban_all">全部</div><div class="v" id="banCount">0</div></div>
         <div class="card" data-ban-filter="quota"><div class="k" data-i18n="ban_quota">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>
@@ -610,7 +611,7 @@ func renderUIPage(pluginID string) []byte {
           <table class="ban-table">
             <thead>
               <tr>
-                <th class="col-name" data-i18n="th_account">账号</th><th data-i18n="ban_th_reason">禁用原因</th><th data-i18n="ban_th_time">禁用时间</th><th data-i18n="ban_th_restore">恢复方式</th><th data-i18n="ban_th_remain">剩余</th><th class="col-ops" data-i18n="th_ops">操作</th>
+                <th class="col-name" data-i18n="th_account">账号</th><th data-i18n="ban_th_reason">禁用原因</th><th data-i18n="ban_th_time">禁用时间</th><th data-i18n="ban_th_restore">恢复方式</th><th data-i18n="ban_th_remain">剩余</th><th data-i18n="ban_th_sync">CPA 同步</th><th class="col-ops" data-i18n="th_ops">操作</th>
               </tr>
             </thead>
             <tbody id="banRows"></tbody>
@@ -649,6 +650,12 @@ func renderUIPage(pluginID string) []byte {
       ban_manual:'需手动解禁', ban_auto_restore:'定时自动恢复',
       ban_th_account:'账号', ban_th_reason:'禁用原因', ban_th_time:'禁用时间', ban_th_restore:'恢复方式', ban_th_remain:'剩余', ban_th_until:'恢复时间', ban_th_ops:'操作',
       ban_empty:'当前没有自动禁用中的账号',
+      ban_unsynced:'未同步到 CPA',
+      ban_synced:'已同步',
+      ban_sync_error:'同步错误',
+      ban_unsynced_banner_prefix:'有 ',
+      ban_unsynced_banner_suffix:' 个本地禁用尚未同步到 CPA（不会显示为已成功禁用）',
+      ban_th_sync:'CPA 同步',
       ban_unban:'解禁',
       ban_status_loading:'加载中…',
 
@@ -782,6 +789,12 @@ func renderUIPage(pluginID string) []byte {
       ban_manual:'Manual unban required', ban_auto_restore:'Auto restore on schedule',
       ban_th_account:'Account', ban_th_reason:'Ban reason', ban_th_time:'Banned at', ban_th_restore:'Restore mode', ban_th_remain:'Remaining', ban_th_until:'Restore at', ban_th_ops:'Actions',
       ban_empty:'No accounts are currently auto-banned',
+      ban_unsynced:'Unsynced to CPA',
+      ban_synced:'Synced',
+      ban_sync_error:'Sync error',
+      ban_unsynced_banner_prefix:'',
+      ban_unsynced_banner_suffix:' local ban(s) not yet synced to CPA (not shown as successfully disabled)',
+      ban_th_sync:'CPA sync',
       ban_unban:'Unban',
       ban_status_loading:'Loading…',
 
@@ -2512,7 +2525,7 @@ func renderUIPage(pluginID string) []byte {
     if (c === 'subscription:free-usage-exhausted' || c.indexOf('free-usage-exhausted') >= 0) return 'quota';
     if (c === 'personal-team-blocked:spending-limit' || c.indexOf('spending-limit') >= 0) return 'spending_limit';
     if (c === 'permission-denied' || c.indexOf('permission-denied') >= 0) return 'permission';
-    if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0) return 'unauthorized';
+    if (c === 'unauthorized' || c === '401' || c.indexOf('unauthorized') >= 0 || c.indexOf('authentication_error') >= 0 || c.indexOf('invalid_token') >= 0 || c.indexOf('token_expired') >= 0 || c === 'unauthenticated') return 'unauthorized';
     if (c === 'manual-disabled' || c.indexOf('manual-disabled') >= 0) return 'manual';
     return 'other';
   }
@@ -2570,12 +2583,17 @@ func renderUIPage(pluginID string) []byte {
     if (!rows) return;
     rows.innerHTML = slice.map((b) => {
       const id = String(b.auth_id || '');
+      const synced = !!b.cpa_synced;
+      let syncLabel = synced ? t('ban_synced') : t('ban_unsynced');
+      const syncErr = String(b.cpa_sync_error || '').trim();
+      if (!synced && syncErr) syncLabel += ' · ' + syncErr;
       return '<tr>' +
         '<td class="col-name">' + esc(id) + '</td>' +
         '<td>' + esc(formatBanReason(b.error_code)) + '</td>' +
         '<td>' + esc(formatShanghaiTime(b.banned_at)) + '</td>' +
         '<td>' + esc(formatResetSource(b.reset_source, b.remaining_seconds)) + '</td>' +
         '<td>' + esc(formatRemain(b.remaining_seconds)) + '</td>' +
+        '<td>' + esc(syncLabel) + '</td>' +
         '<td><button type="button" data-unban="' + esc(id).replace(/"/g, '&quot;') + '">' + t('ban_unban') + '</button></td>' +
       '</tr>';
     }).join('');
@@ -2661,6 +2679,17 @@ async function loadBans() {
       set('banSpendingLimitCount', data.spending_limit_count != null ? data.spending_limit_count : s);
       set('banPermissionCount', data.permission_count != null ? data.permission_count : p);
       set('banUnauthorizedCount', data.unauthorized_count != null ? data.unauthorized_count : u);
+      const unsynced = data.unsynced_count != null ? Number(data.unsynced_count) : banState.bans.filter((b)=>!b.cpa_synced).length;
+      const banner = document.getElementById('banUnsyncedBanner');
+      if (banner) {
+        if (unsynced > 0) {
+          banner.style.display = 'block';
+          banner.textContent = t('ban_unsynced_banner_prefix') + unsynced + t('ban_unsynced_banner_suffix');
+        } else {
+          banner.style.display = 'none';
+          banner.textContent = '';
+        }
+      }
       set('banManualDisabledCount', data.manual_disabled_count != null ? data.manual_disabled_count : m);
       const on = data.enabled !== false;
       const toggle = document.getElementById('banEnabledToggle');

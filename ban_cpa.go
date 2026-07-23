@@ -13,7 +13,7 @@ import (
 var errAuthFileNotFound = errors.New("auth file not found")
 
 func disableAuthInCPA(authID string) error {
-	return setAuthDisabledInCPA(authID, true, cpaManagementPassword())
+	return setAuthDisabledInCPA(authID, true, cpaManagementPasswordOrCached())
 }
 
 func enableAuthInCPA(authID string, password string) error {
@@ -54,7 +54,7 @@ func setAuthDisabledInCPA(authID string, disabled bool, password string) error {
 	}
 	password = strings.TrimSpace(password)
 	if password == "" {
-		password = cpaManagementPassword()
+		password = cpaManagementPasswordOrCached()
 	}
 	if password == "" {
 		return fmt.Errorf("CPA management password is unavailable")

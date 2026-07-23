@@ -260,17 +260,17 @@ func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBaseURL := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBaseURL := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
 	defer func() {
-		cpaManagementBaseURL = oldBaseURL
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBaseURL)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword)
 	}()
 
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-management-password")
 
 	status, _, err := callCPAManagement(http.MethodPatch, "/status", []byte(`{"disabled":true}`))
@@ -283,6 +283,8 @@ func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
 }
 
 func TestResolveManagementPasswordPrefersRequestBearer(t *testing.T) {
+	clearManagementCredentialCacheForTest()
+	t.Cleanup(clearManagementCredentialCacheForTest)
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
 	defer func() { _ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword) }()
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "env-password")
@@ -291,6 +293,11 @@ func TestResolveManagementPasswordPrefersRequestBearer(t *testing.T) {
 	if got := resolveManagementPassword(headers); got != "page-password" {
 		t.Fatalf("password = %q, want page-password", got)
 	}
+	// Plugin-level cache remembers page key for realtime auto-disable paths.
+	if got := resolveManagementPassword(nil); got != "page-password" {
+		t.Fatalf("cached password = %q, want page-password", got)
+	}
+	clearManagementCredentialCacheForTest()
 	if got := resolveManagementPassword(nil); got != "env-password" {
 		t.Fatalf("env password = %q, want env-password", got)
 	}
@@ -306,16 +313,16 @@ func TestCallCPAManagementWithAuthUsesRequestPasswordWithoutEnv(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBaseURL := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBaseURL := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
 	defer func() {
-		cpaManagementBaseURL = oldBaseURL
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBaseURL)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword)
 	}()
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Unsetenv("MANAGEMENT_PASSWORD")
 	_ = os.Unsetenv("CPA_MANAGEMENT_KEY")
 
@@ -333,19 +340,19 @@ func TestResolveManagementBaseURLIgnoresRequestHeadersByDefault(t *testing.T) {
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
-	oldDefault := cpaManagementBaseURL
+	oldDefault := getCPAManagementBaseURL()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
-		cpaManagementBaseURL = oldDefault
+		setCPAManagementBaseURL(oldDefault)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
 	_ = os.Unsetenv("PORT")
 	_ = os.Unsetenv("CPA_PORT")
-	cpaManagementBaseURL = "http://127.0.0.1:8317"
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
 
 	headers := http.Header{
 		"Origin":            []string{"https://attacker.example"},
@@ -397,26 +404,26 @@ func TestCallCPAManagementRetriesOriginAfterUnreachablePORT(t *testing.T) {
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
-	oldDo := cpaManagementDo
+	oldDo := getCPAManagementDo()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
-		cpaManagementDo = oldDo
+		setCPAManagementDo(oldDo)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
 	_ = os.Setenv("PORT", "65530")
 	_ = os.Unsetenv("CPA_PORT")
 	var calls []string
-	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+	setCPAManagementDo(func(req *http.Request) (*http.Response, error) {
 		calls = append(calls, req.URL.String())
 		if req.URL.Host == "127.0.0.1:65530" {
 			return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
 		}
 		return server.Client().Do(req)
-	}
+	})
 
 	status, _, err := callCPAManagementWithAuth(
 		http.MethodPatch,
@@ -439,19 +446,19 @@ func TestCallCPAManagementRetriesOriginAfterUnreachablePORT(t *testing.T) {
 func TestCallCPAManagementDoesNotLeakKeyToOriginWhenEnvConfigured(t *testing.T) {
 	oldBase := os.Getenv("CPA_BASE_URL")
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
-	oldDo := cpaManagementDo
+	oldDo := getCPAManagementDo()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
-		cpaManagementDo = oldDo
+		setCPAManagementDo(oldDo)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", "http://127.0.0.1:65531")
 	var calls []string
-	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+	setCPAManagementDo(func(req *http.Request) (*http.Response, error) {
 		calls = append(calls, req.URL.String())
 		return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
-	}
+	})
 
 	_, _, err := callCPAManagementWithAuth(
 		http.MethodDelete,
@@ -473,23 +480,23 @@ func TestCallCPAManagementDoesNotRetryForwardedOrHostHeaders(t *testing.T) {
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
-	oldDo := cpaManagementDo
+	oldDo := getCPAManagementDo()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
-		cpaManagementDo = oldDo
+		setCPAManagementDo(oldDo)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
 	_ = os.Setenv("PORT", "65530")
 	_ = os.Unsetenv("CPA_PORT")
 	var calls []string
-	cpaManagementDo = func(req *http.Request) (*http.Response, error) {
+	setCPAManagementDo(func(req *http.Request) (*http.Response, error) {
 		calls = append(calls, req.URL.String())
 		return nil, &url.Error{Op: req.Method, URL: req.URL.String(), Err: syscall.ECONNREFUSED}
-	}
+	})
 
 	_, _, err := callCPAManagementWithAuth(
 		http.MethodDelete,
@@ -529,22 +536,22 @@ func TestCallCPAManagementDoesNotRetryOriginAfterHTTPError(t *testing.T) {
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
-	oldDefault := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldDefault := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
-		cpaManagementBaseURL = oldDefault
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldDefault)
+		setCPAManagementDo(oldDo)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
 	_ = os.Unsetenv("PORT")
 	_ = os.Unsetenv("CPA_PORT")
-	cpaManagementBaseURL = local.URL
-	cpaManagementDo = local.Client().Do
+	setCPAManagementBaseURL(local.URL)
+	setCPAManagementDo(local.Client().Do)
 
 	_, _, err := callCPAManagementWithAuth(
 		http.MethodPatch,
@@ -709,15 +716,15 @@ func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldBase := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPass := os.Getenv("MANAGEMENT_PASSWORD")
-	cpaManagementBaseURL = server.URL
-	cpaManagementDo = server.Client().Do
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "page-password")
 	t.Cleanup(func() {
-		cpaManagementBaseURL = oldBase
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPass)
 		select {
 		case <-release:
@@ -980,21 +987,21 @@ func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
 	oldTLS := os.Getenv("CPA_TLS")
-	oldDefault := cpaManagementBaseURL
+	oldDefault := getCPAManagementBaseURL()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
 		_ = os.Setenv("CPA_TLS", oldTLS)
-		cpaManagementBaseURL = oldDefault
+		setCPAManagementBaseURL(oldDefault)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
 	_ = os.Unsetenv("PORT")
 	_ = os.Unsetenv("CPA_PORT")
 	_ = os.Setenv("CPA_TLS", "true")
-	cpaManagementBaseURL = "http://127.0.0.1:8317"
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
 
 	if got := resolveManagementBaseURL(nil); got != "https://127.0.0.1:8317" {
 		t.Fatalf("tls base url = %q", got)
@@ -1006,6 +1013,8 @@ func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
 }
 
 func TestCallCPAManagementRetriesHTTPSAfterPlainHTTPMismatch(t *testing.T) {
+	clearManagementCredentialCacheForTest()
+	t.Cleanup(clearManagementCredentialCacheForTest)
 	tlsServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			t.Fatalf("method = %s", r.Method)
@@ -1022,14 +1031,14 @@ func TestCallCPAManagementRetriesHTTPSAfterPlainHTTPMismatch(t *testing.T) {
 	u := strings.TrimPrefix(tlsServer.URL, "https://")
 	httpBase := "http://" + u
 
-	oldBaseURL := cpaManagementBaseURL
-	oldDo := cpaManagementDo
+	oldBaseURL := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
 	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
 	oldCPABase := os.Getenv("CPA_BASE_URL")
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	defer func() {
-		cpaManagementBaseURL = oldBaseURL
-		cpaManagementDo = oldDo
+		setCPAManagementBaseURL(oldBaseURL)
+		setCPAManagementDo(oldDo)
 		_ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword)
 		_ = os.Setenv("CPA_BASE_URL", oldCPABase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
@@ -1040,7 +1049,7 @@ func TestCallCPAManagementRetriesHTTPSAfterPlainHTTPMismatch(t *testing.T) {
 	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", httpBase)
 	_ = os.Setenv("MANAGEMENT_PASSWORD", "tls-pass")
 	// Use real client that accepts the test cert via InsecureSkipVerify in plugin client.
-	cpaManagementDo = cpaManagementClient.Do
+	setCPAManagementDo(cpaManagementClient.Do)
 
 	status, _, err := callCPAManagement(http.MethodPatch, "/v0/management/auth-files/status", []byte(`{"disabled":true}`))
 	if err != nil {

@@ -128,6 +128,7 @@ func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
 func cliproxyPluginShutdown() {
 	stopInspectionScheduleLoop()
 	stopBanRestoreLoop()
+	stopBanDisposeWorkers()
 	engine.shutdown()
 	C.clear_host_api()
 }

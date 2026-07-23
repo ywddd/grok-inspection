@@ -38,11 +38,15 @@ func (s *banStore) Set(entry banEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.bans[entry.AuthID]; ok {
-		// Keep the longer cooldown when a duplicate exhausted event races.
+		// Keep the longer cooldown when a duplicate exhausted event races,
+		// but ALWAYS advance revision so concurrent unban/restore/disable
+		// cannot miss a shorter new reset event.
 		if existing.ResetAt.After(entry.ResetAt) {
-			return
+			entry.ResetAt = existing.ResetAt
+			if entry.ResetSource == "" {
+				entry.ResetSource = existing.ResetSource
+			}
 		}
-		// Same reset window: still replace so BannedAt/revision advance.
 	}
 	s.rev++
 	entry.Revision = s.rev
@@ -115,6 +119,11 @@ func (s *banStore) UnsyncedCPA() []banEntry {
 
 // UpdateCpaSynced marks whether the latest CPA disable succeeded.
 func (s *banStore) UpdateCpaSynced(authID string, synced bool) {
+	s.UpdateCpaSyncState(authID, synced, "")
+}
+
+// UpdateCpaSyncState sets sync flag and optional last error (cleared on success).
+func (s *banStore) UpdateCpaSyncState(authID string, synced bool, syncErr string) {
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
 		return
@@ -126,6 +135,11 @@ func (s *banStore) UpdateCpaSynced(authID string, synced bool) {
 		return
 	}
 	entry.CpaSynced = synced
+	if synced {
+		entry.CpaSyncError = ""
+	} else if strings.TrimSpace(syncErr) != "" {
+		entry.CpaSyncError = strings.TrimSpace(syncErr)
+	}
 	s.bans[authID] = entry
 }
 
@@ -303,6 +317,7 @@ func (s *banStore) Load(path string, now time.Time) error {
 		TraceID     string    `json:"trace_id,omitempty"`
 		CpaSynced   *bool     `json:"cpa_synced"`
 		Revision    uint64    `json:"revision,omitempty"`
+		CpaSyncError string    `json:"cpa_sync_error,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &encoded); err != nil {
 		return err
@@ -323,6 +338,7 @@ func (s *banStore) Load(path string, now time.Time) error {
 			TraceID:     item.TraceID,
 			CpaSynced:   true, // legacy default
 			Revision:    item.Revision,
+			CpaSyncError: item.CpaSyncError,
 		}
 		if item.CpaSynced != nil {
 			entry.CpaSynced = *item.CpaSynced

@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 import (
 	"fmt"
@@ -59,8 +59,6 @@ var inspectionScheduleRuntime = struct {
 	wake     chan struct{}
 	stop     chan struct{}
 	done     chan struct{}
-	keyMu    sync.RWMutex
-	key      string
 }{
 	wake: make(chan struct{}, 1),
 	stop: make(chan struct{}),
@@ -175,7 +173,8 @@ func inspectionScheduleSnapshot() persistedInspectionSchedule {
 
 func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspectionSchedule, error) {
 	engine.mu.Lock()
-	cfg := normalizePersistedInspectionSchedule(engine.schedule)
+	prev := normalizePersistedInspectionSchedule(engine.schedule)
+	cfg := prev
 	if req.Enabled != nil {
 		cfg.Enabled = *req.Enabled
 	}
@@ -222,28 +221,27 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 		cfg.LastStatus = "disabled"
 	}
 	cfg.LastError = ""
+	// Apply optimistically, then require durable schedule.json before success.
 	engine.schedule = cfg
-	engine.persistLocked()
 	engine.mu.Unlock()
+
+	if err := saveInspectionScheduleSync(cfg); err != nil {
+		engine.mu.Lock()
+		engine.schedule = prev
+		engine.mu.Unlock()
+		return prev, err
+	}
 	wakeInspectionScheduleLoop()
 	return cfg, nil
 }
 
 func rememberInspectionScheduleManagementKey(key string) {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return
-	}
-	inspectionScheduleRuntime.keyMu.Lock()
-	inspectionScheduleRuntime.key = key
-	inspectionScheduleRuntime.keyMu.Unlock()
+	// Back-compat alias: schedule routes share the plugin-level Management cache.
+	rememberManagementCredential(key)
 }
 
 func inspectionScheduleManagementKey() string {
-	inspectionScheduleRuntime.keyMu.RLock()
-	key := inspectionScheduleRuntime.key
-	inspectionScheduleRuntime.keyMu.RUnlock()
-	return firstNonEmpty(key, cpaManagementPassword())
+	return cpaManagementPasswordOrCached()
 }
 
 func inspectionScheduleStatus() map[string]any {
@@ -562,6 +560,6 @@ func setInspectionScheduleRuntimeStatus(status, lastError string, started time.T
 		cfg.NextRunAt = ""
 	}
 	engine.schedule = cfg
-	engine.persistLocked()
 	engine.mu.Unlock()
+	_ = saveInspectionScheduleSync(cfg)
 }

@@ -116,6 +116,11 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		method = http.MethodGet
 	}
 
+	// Remember page-provided Management Key for realtime auto-disable (memory only).
+	if key := resolveManagementPassword(req.Headers); key != "" {
+		rememberManagementCredential(key)
+	}
+
 	switch {
 	case method == http.MethodGet && matchesResourcePath(req.Path, "/status"):
 		return htmlResponse(http.StatusOK, renderUIPage(pluginName))
@@ -213,7 +218,12 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		rememberInspectionScheduleManagementKey(resolveManagementPassword(req.Headers))
 		cfg, err := updateInspectionSchedule(body)
 		if err != nil {
-			return jsonResponse(http.StatusBadRequest, map[string]any{"error": err.Error(), "ok": false})
+			msg := err.Error()
+			status := http.StatusInternalServerError
+			if strings.Contains(msg, "must be") || strings.Contains(msg, "interval") || strings.Contains(msg, "workers") || strings.Contains(msg, "permission_denied_action") || strings.Contains(msg, "spending_limit_action") {
+				status = http.StatusBadRequest
+			}
+			return jsonResponse(status, map[string]any{"error": msg, "ok": false})
 		}
 		status := inspectionScheduleStatus()
 		status["ok"] = true

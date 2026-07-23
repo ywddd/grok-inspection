@@ -83,6 +83,10 @@ func (j *unbanJobState) isActive(runID uint64) bool {
 // Caller must releaseUnbanSlot when finished.
 func claimUnbanSlot(total int, current string, async bool) (runID uint64, err error) {
 	engine.mu.Lock()
+	if engine.shuttingDown {
+		engine.mu.Unlock()
+		return 0, fmt.Errorf("busy: shutting down")
+	}
 	if engine.running || engine.applying || engine.applyDraining || engine.actionInFlight > 0 {
 		engine.mu.Unlock()
 		return 0, fmt.Errorf("busy")

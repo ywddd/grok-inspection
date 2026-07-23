@@ -749,6 +749,10 @@ func cloneHTTPHeader(src http.Header) http.Header {
 func (e *inspectionEngine) startApply(req applyRequest, password string, headers http.Header) error {
 	lang := normalizeLang(req.Lang)
 	e.mu.Lock()
+	if e.shuttingDown {
+		e.mu.Unlock()
+		return httpErr(http.StatusServiceUnavailable, fmt.Errorf("%s", T(lang, "busy_generic")))
+	}
 	if e.running || e.applying || e.applyDraining || e.actionInFlight > 0 {
 		e.mu.Unlock()
 		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_generic")))
@@ -812,6 +816,10 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 	key := firstNonEmpty(req.AuthIndex, req.Name, name)
 
 	e.mu.Lock()
+	if e.shuttingDown {
+		e.mu.Unlock()
+		return 0, "", httpErr(http.StatusServiceUnavailable, fmt.Errorf("%s", T(lang, "busy_generic")))
+	}
 	if e.running {
 		e.mu.Unlock()
 		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_inspection")))

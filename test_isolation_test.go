@@ -137,6 +137,7 @@ func resetEngineAndStoresForTestIsolation() {
 	engine.applying = false
 	engine.applyDraining = false
 	engine.stopped = false
+	engine.shuttingDown = false
 	engine.mu.Unlock()
 	// loadFromDisk now resolves under GROK_INSPECTION_DATA_DIR (empty temp).
 	engine.loadFromDisk()

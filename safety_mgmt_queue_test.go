@@ -901,7 +901,11 @@ func TestEngineShutdownSourceStopsBanDisposeWorkers(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("shutdown missing")
 	}
-	chunk := src[idx : idx+400]
+	end := idx + 1200
+	if end > len(src) {
+		end = len(src)
+	}
+	chunk := src[idx:end]
 	if !strings.Contains(chunk, "stopBanDisposeWorkers()") {
 		t.Fatalf("engine.shutdown must stop ban dispose workers: %q", chunk)
 	}

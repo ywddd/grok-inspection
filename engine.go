@@ -176,14 +176,17 @@ type authListResponse struct {
 }
 
 type inspectionEngine struct {
-	lang             Lang // operator-facing language for the current/last inspection run (default zh)
-	applyLang        Lang // language for the active bulk-apply job (request-scoped)
-	stopLang         Lang // language of the latest user stop request (cancel/stop copy)
-	mu               sync.Mutex
-	runWG            sync.WaitGroup
-	persistWG        sync.WaitGroup // async persistLocked writers
-	running          bool
-	stopped          bool
+	lang      Lang // operator-facing language for the current/last inspection run (default zh)
+	applyLang Lang // language for the active bulk-apply job (request-scoped)
+	stopLang  Lang // language of the latest user stop request (cancel/stop copy)
+	mu        sync.Mutex
+	runWG     sync.WaitGroup
+	persistWG sync.WaitGroup // async persistLocked writers
+	running   bool
+	stopped   bool
+	// shuttingDown is permanent plugin unload gate. Unlike stopped (user cancel),
+	// it is never cleared by start/claim and blocks all runWG/unban WaitGroup Adds.
+	shuttingDown     bool
 	applying         bool
 	applyDraining    bool   // bulk apply stopped but in-flight PATCHs still finishing
 	applyRunID       uint64 // invalidates in-flight bulk apply on stop
@@ -529,6 +532,10 @@ func (e *inspectionEngine) start(req startRequest) error {
 	}
 
 	e.mu.Lock()
+	if e.shuttingDown {
+		e.mu.Unlock()
+		return httpErr(http.StatusServiceUnavailable, fmt.Errorf("%s", T(lang, "busy_generic")))
+	}
 	if e.running || e.applying || e.applyDraining {
 		e.mu.Unlock()
 		return httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "already_running")))
@@ -712,17 +719,23 @@ func (e *inspectionEngine) abortRunLocked() {
 }
 
 func (e *inspectionEngine) shutdown() {
-	// Stop accepting new dispose/unban work, then wait for every producer that
-	// may mutate the ban store (runWG action/apply workers, unban job).
-	stopBanDisposeWorkers()
-	stopUnbanJob()
+	// Permanent gate first under engine.mu so start/startApply/startAction/claimUnbanSlot
+	// cannot Add to WaitGroups after Wait begins (and cannot clear stopped).
+	// Normal stop() only sets stopped; it must not set shuttingDown.
 	e.mu.Lock()
+	e.shuttingDown = true
 	e.stopped = true
 	e.runID++
 	e.applyRunID++
 	e.applying = false
 	e.applyDraining = true
 	e.mu.Unlock()
+
+	// Independent workers: no runWG/unbanJob.wg Add after gate above.
+	stopBanDisposeWorkers()
+	stopUnbanJob()
+
+	// Wait only after gate; entrypoints that Add hold engine.mu and check shuttingDown first.
 	e.runWG.Wait()
 	unbanJob.wg.Wait()
 	// Async results.json writers must finish before TempDir/teardown.
@@ -734,6 +747,7 @@ func (e *inspectionEngine) shutdown() {
 	// Wait until they finish before clearing host/dlclose (unbounded; host ABI).
 	waitHostCallsForShutdown(5 * time.Second)
 	e.mu.Lock()
+	// Keep shuttingDown permanent; only clear applyDraining so status is idle-looking.
 	e.applyDraining = false
 	e.mu.Unlock()
 }

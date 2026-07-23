@@ -1139,6 +1139,7 @@ func TestShutdownFinalBanFlushAfterProducers(t *testing.T) {
 		// restore engine flags
 		engine.mu.Lock()
 		engine.stopped = false
+		engine.shuttingDown = false
 		engine.applyDraining = false
 		engine.mu.Unlock()
 	})

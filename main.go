@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -247,9 +248,13 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 		if errUnban != nil {
 			status := http.StatusBadRequest
 			msg := errUnban.Error()
-			if strings.Contains(msg, "busy") || strings.Contains(msg, "unban_conflict") {
+			switch {
+			case errors.Is(errUnban, errBanSupersededByNewerRevision):
+				// Concurrent ban retained + re-disabled: not missing, not success.
 				status = http.StatusConflict
-			} else if strings.Contains(msg, "persist ban state") {
+			case strings.Contains(msg, "busy"):
+				status = http.StatusConflict
+			case strings.Contains(msg, "persist ban state"):
 				status = http.StatusInternalServerError
 			}
 			// Never set missing=true on error (including superseded concurrent ban).

@@ -245,6 +245,11 @@ func TestStopDuringRetryReturnsImmediatelyAndDiscardsLateResult(t *testing.T) {
 }
 
 func TestCallCPAManagementUsesBearerPasswordAndJSON(t *testing.T) {
+	// Isolate process-global management credential cache so prior tests that
+	// remembered a page Bearer (e.g. "test-pass") cannot shadow MANAGEMENT_PASSWORD.
+	clearManagementCredentialCacheForTest()
+	t.Cleanup(clearManagementCredentialCacheForTest)
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch {
 			t.Fatalf("method = %s", r.Method)

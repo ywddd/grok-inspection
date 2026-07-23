@@ -85,6 +85,10 @@ func TestDecodeConfigIgnoresCPATopLevelEnabled(t *testing.T) {
 }
 
 func TestConfigureLoadsLifecycleYAML(t *testing.T) {
+	cfg := defaultPluginConfig()
+	cfg.PersistState = false
+	isolatePluginLifecycle(t, cfg, false)
+
 	err := configure([]byte(`{"schema_version":1,"config_yaml":"ZmFsbGJhY2tfaG91cnM6IDcyCnBlcnNpc3Rfc3RhdGU6IGZhbHNlCg=="}`))
 	if err != nil {
 		t.Fatalf("configure() error = %v", err)

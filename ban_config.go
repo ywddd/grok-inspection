@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -205,23 +206,98 @@ func updateAutobanSettings(enabled *bool, fallbackHours *int) (pluginConfig, err
 	return cfg, nil
 }
 
-func configure(raw []byte) error {
+// pluginLifecycleMu serializes register/reconfigure so path switches and
+// config updates cannot race usage.handle Set/markDirty mid-migration.
+var (
+	pluginLifecycleMu sync.Mutex
+	pluginRegistered  bool // true after the first successful plugin.register
+)
+
+func parseLifecycleConfig(raw []byte) (pluginConfig, error) {
 	var req lifecycleRequest
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, &req); err != nil {
-			return err
+			return pluginConfig{}, err
 		}
 	}
 	cfg, err := decodeConfig(req.ConfigYAML)
 	if err != nil {
-		return err
+		return pluginConfig{}, err
 	}
 	// UI-saved switch/hours win over host YAML so the page toggle sticks.
-	cfg = applyRuntimeSettings(cfg)
+	return applyRuntimeSettings(cfg), nil
+}
+
+// registerPlugin handles plugin.register: first time loads ban state (and legacy
+// migration), starts background loops. Subsequent register is treated as
+// reconfigure so disk cannot overwrite live bans.
+func registerPlugin(raw []byte) error {
+	pluginLifecycleMu.Lock()
+	defer pluginLifecycleMu.Unlock()
+
+	cfg, err := parseLifecycleConfig(raw)
+	if err != nil {
+		return err
+	}
+	if !pluginRegistered {
+		currentConfig.Store(cfg)
+		loadBanState(cfg)
+		startInspectionScheduleLoop()
+		pluginRegistered = true
+		return nil
+	}
+	return applyReconfigureLocked(loadedConfig(), cfg)
+}
+
+// reconfigurePlugin handles plugin.reconfigure: never Load-overwrites activeStore.
+// Same state_file only updates config. New persist path migrates current memory out.
+func reconfigurePlugin(raw []byte) error {
+	pluginLifecycleMu.Lock()
+	defer pluginLifecycleMu.Unlock()
+
+	cfg, err := parseLifecycleConfig(raw)
+	if err != nil {
+		return err
+	}
+	if !pluginRegistered {
+		// Only plugin.register may load persisted/legacy state and start loops.
+		currentConfig.Store(cfg)
+		return nil
+	}
+	return applyReconfigureLocked(loadedConfig(), cfg)
+}
+
+// applyReconfigureLocked updates config under pluginLifecycleMu.
+// Must not call activeStore.Load (would drop unsynced in-memory bans).
+func applyReconfigureLocked(oldCfg, cfg pluginConfig) error {
+	oldPath := strings.TrimSpace(oldCfg.StateFile)
+	newPath := strings.TrimSpace(cfg.StateFile)
+	pathChanged := filepath.Clean(oldPath) != filepath.Clean(newPath)
+	needMigrate := cfg.PersistState && newPath != "" &&
+		(pathChanged || !oldCfg.PersistState || oldPath == "")
+
+	// Persist the live snapshot before publishing the new target. On failure the
+	// old config remains authoritative and the host receives a real error.
+	if needMigrate {
+		if err := banStoreSaveFn(newPath); err != nil {
+			return fmt.Errorf("migrate ban state to %q: %w", newPath, err)
+		}
+	}
+
 	currentConfig.Store(cfg)
-	loadBanState(cfg)
-	startInspectionScheduleLoop()
+	// Retarget pending persistence after config publication. A dirty follow-up
+	// captures Sets that raced the migration snapshot while still using oldCfg.
+	reconfigureBanPersistWorker(cfg, needMigrate)
+	if needMigrate && pathChanged {
+		slog.Info("grok-inspection: migrated live ban state to new state_file",
+			"from", oldPath, "to", newPath, "count", activeStore.Count())
+	}
 	return nil
+}
+
+// configure is retained for older tests/call sites; prefer register/reconfigure.
+func configure(raw []byte) error {
+	return registerPlugin(raw)
 }
 
 func loadBanState(cfg pluginConfig) {

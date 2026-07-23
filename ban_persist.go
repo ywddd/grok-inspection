@@ -99,6 +99,29 @@ func markBanStoreDirty() {
 	w.mu.Unlock()
 }
 
+// reconfigureBanPersistWorker switches future coalesced writes to cfg.StateFile.
+// dirty=true schedules a catch-up snapshot for mutations that raced migration.
+func reconfigureBanPersistWorker(cfg pluginConfig, dirty bool) {
+	w := globalBanPersist
+	w.mu.Lock()
+	if !(cfg.PersistState && cfg.StateFile != "") {
+		w.path = ""
+		w.dirty = false
+		w.mu.Unlock()
+		return
+	}
+	w.path = cfg.StateFile
+	if dirty {
+		w.dirty = true
+	}
+	needStart := w.dirty && !w.started && !w.stop
+	w.cond.Signal()
+	w.mu.Unlock()
+	if needStart {
+		startBanPersistWorker()
+	}
+}
+
 func (w *banPersistWorker) loop() {
 	defer w.wg.Done()
 	backoff := 5 * time.Millisecond

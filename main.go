@@ -34,8 +34,13 @@ type registrationCapabilities struct {
 
 func handleMethod(method string, request []byte) ([]byte, error) {
 	switch method {
-	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
-		if err := configure(request); err != nil {
+	case pluginabi.MethodPluginRegister:
+		if err := registerPlugin(request); err != nil {
+			return nil, err
+		}
+		return okEnvelope(pluginRegistration())
+	case pluginabi.MethodPluginReconfigure:
+		if err := reconfigurePlugin(request); err != nil {
 			return nil, err
 		}
 		return okEnvelope(pluginRegistration())

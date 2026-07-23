@@ -485,8 +485,9 @@ func TestCASSyncStateMarkedDirtyWhenOnlyRedisable(t *testing.T) {
 	close(releaseEnable)
 	select {
 	case err := <-errCh:
-		if err != nil {
-			t.Fatal(err)
+		// 3b79109: concurrent ban during enable returns ban_conflict after successful re-disable.
+		if err == nil || !errors.Is(err, errBanSupersededByNewerRevision) {
+			t.Fatalf("enable must return ban_conflict when concurrent ban retained, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("enable hung after release")

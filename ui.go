@@ -1521,7 +1521,7 @@ func renderUIPage(pluginID string) []byte {
   let confirmOpen = false;
   let confirmClosing = false;
   function closeConfirm(ok) {
-    // Guard against pointerdown + click double fire.
+    // Guard against duplicate close calls.
     if (confirmClosing) return;
     if (!confirmResolver && !confirmOpen) return;
     confirmClosing = true;
@@ -1555,18 +1555,17 @@ func renderUIPage(pluginID string) []byte {
   }
   function bindConfirmAction(el, value) {
     if (!el) return;
-    const fire = (ev) => {
+    el.onpointerdown = null;
+    el.onclick = (ev) => {
       try {
         if (ev) {
           ev.preventDefault();
           ev.stopPropagation();
+          if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
         }
       } catch (_) {}
       closeConfirm(value);
     };
-    // pointerdown responds before click; click kept as fallback.
-    el.onpointerdown = fire;
-    el.onclick = fire;
   }
   function confirmDialog(title, message, opts) {
     opts = opts || {};
@@ -1602,9 +1601,7 @@ func renderUIPage(pluginID string) []byte {
       if (cancelEl) cancelEl.style.display = showCancel ? '' : 'none';
       bindConfirmAction(okEl, true);
       bindConfirmAction(cancelEl, false);
-      modal.onpointerdown = (ev) => {
-        if (ev.target === modal) closeConfirm(false);
-      };
+      modal.onpointerdown = null;
       modal.onclick = (ev) => {
         if (ev.target === modal) closeConfirm(false);
       };

@@ -288,6 +288,97 @@ func TestEnableCASConflictFailsBulkApply(t *testing.T) {
 	}
 }
 
+func TestEnableCASConflictRedisableUsesRequestOriginAndPassword(t *testing.T) {
+	isolateActiveStore(t)
+	pauseBanDisposeWorkersForTest(t)
+	rearmEngineAfterShutdownForTest()
+	t.Cleanup(rearmEngineAfterShutdownForTest)
+
+	var enableHits atomic.Int32
+	var disableHits atomic.Int32
+	now := time.Now()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer page-password" {
+			t.Errorf("authorization=%q want page password", got)
+		}
+		var body struct {
+			Disabled bool `json:"disabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if body.Disabled {
+			disableHits.Add(1)
+		} else {
+			enableHits.Add(1)
+			activeStore.Set(banEntry{
+				AuthID:      "origin-enable-conflict.json",
+				Provider:    "xai",
+				ErrorCode:   unauthorizedErrorCode,
+				BannedAt:    now,
+				ResetAt:     now.AddDate(10, 0, 0),
+				ResetSource: "manual_unban",
+				CpaSynced:   false,
+			})
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(server.Close)
+	installUnreachableDefaultPORTWithOriginDial(t, server.Client().Do, nil, nil)
+
+	oldPassword := os.Getenv("MANAGEMENT_PASSWORD")
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "env-password-must-not-win")
+	t.Cleanup(func() { _ = os.Setenv("MANAGEMENT_PASSWORD", oldPassword) })
+
+	activeStore.Set(banEntry{
+		AuthID:      "origin-enable-conflict.json",
+		Provider:    "xai",
+		ErrorCode:   exhaustedErrorCode,
+		BannedAt:    now.Add(-time.Hour),
+		ResetAt:     now.Add(time.Hour),
+		ResetSource: "local_plus_fallback",
+		CpaSynced:   true,
+	})
+	engine.mu.Lock()
+	oldResults := append([]accountResult(nil), engine.results...)
+	engine.results = []accountResult{{
+		AuthIndex:      "origin-enable-conflict",
+		Name:           "origin-enable-conflict.json",
+		FileName:       "origin-enable-conflict.json",
+		Disabled:       true,
+		Classification: "quota_exhausted",
+		Action:         "enable",
+	}}
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = oldResults
+		engine.mu.Unlock()
+	})
+
+	headers := http.Header{
+		"Authorization": []string{"Bearer page-password"},
+		"Origin":        []string{server.URL},
+	}
+	err := setAuthDisabled("origin-enable-conflict.json", false, "page-password", headers, true)
+	if !errors.Is(err, errBanSupersededByNewerRevision) {
+		t.Fatalf("enable conflict error=%v want %v", err, errBanSupersededByNewerRevision)
+	}
+	if enableHits.Load() != 1 || disableHits.Load() != 1 {
+		t.Fatalf("origin hits enable=%d disable=%d want 1/1", enableHits.Load(), disableHits.Load())
+	}
+	entry, ok := activeStore.Get("origin-enable-conflict.json")
+	if !ok {
+		t.Fatal("newer ban must remain")
+	}
+	if !entry.CpaSynced || entry.CpaSyncError != "" {
+		t.Fatalf("re-disabled ban sync state=%+v", entry)
+	}
+}
+
 func TestLocalizeBanConflictSuperseded(t *testing.T) {
 	raw := errBanSupersededByNewerRevision.Error()
 	zh := localizeKnownActionError(LangZH, raw)

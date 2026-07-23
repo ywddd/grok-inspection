@@ -74,6 +74,11 @@ func setAuthDisabled(name string, disabled bool, password string, headers http.H
 }
 
 func setAuthDisabledWithBanReason(name string, disabled bool, password string, headers http.Header, persist bool, banErrorCode string) error {
+	resolvedPassword := strings.TrimSpace(password)
+	if resolvedPassword == "" {
+		resolvedPassword = resolveManagementPassword(headers)
+	}
+	originHeaders := managementOriginOnlyHeaders(headers)
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		return errTarget
@@ -97,7 +102,7 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 		if !disabled {
 			pre = listBansMatchingTarget(activeStore, target, name)
 		}
-		if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, password, headers); errPatch != nil {
+		if _, _, errPatch := callCPAManagementWithAuth(http.MethodPatch, "/v0/management/auth-files/status", body, resolvedPassword, headers); errPatch != nil {
 			return errPatch
 		}
 
@@ -126,7 +131,7 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 			var localBanRemains bool
 			var cpaDisabledOK bool
 			var storeChanged bool
-			removed, localBanRemains, cpaDisabledOK, storeChanged, errCAS = clearBansMatchingTargetCAS(activeStore, target, name, pre)
+			removed, localBanRemains, cpaDisabledOK, storeChanged, errCAS = clearBansMatchingTargetCASWithOrigin(activeStore, target, name, pre, resolvedPassword, originHeaders)
 			_ = removed
 			banStateChanged = storeChanged
 			// Only mark the row disabled when a local ban remains AND CPA re-disable
@@ -349,6 +354,10 @@ func banIDMatchesAliases(authID string, aliases map[string]struct{}) bool {
 //	cpaDisabledOK: every remaining ban was successfully re-disabled in CPA
 //	               (true when no remaining bans either)
 func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileEntry, name string, pre []banEntry) (removed int, localBanRemains bool, cpaDisabledOK bool, storeChanged bool, err error) {
+	return clearBansMatchingTargetCASWithOrigin(store, target, name, pre, "", nil)
+}
+
+func clearBansMatchingTargetCASWithOrigin(store *banStore, target *pluginapi.HostAuthFileEntry, name string, pre []banEntry, password string, originHeaders http.Header) (removed int, localBanRemains bool, cpaDisabledOK bool, storeChanged bool, err error) {
 	if store == nil {
 		return 0, false, true, false, nil
 	}
@@ -365,7 +374,7 @@ func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileE
 		expected, inPre := preByID[entry.AuthID]
 		if !inPre {
 			// Not in the pre-enable snapshot: concurrent ban — re-disable.
-			if errRD := redisableKeptBan(store, entry.AuthID); errRD != nil {
+			if errRD := redisableKeptBanWithOrigin(store, entry.AuthID, password, originHeaders); errRD != nil {
 				reDisableOK = false
 				if firstErr == nil {
 					firstErr = errRD
@@ -388,7 +397,7 @@ func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileE
 		}
 		// DeleteIf failed because revision moved: re-disable the live ban.
 		_ = current
-		if errRD := redisableKeptBan(store, entry.AuthID); errRD != nil {
+		if errRD := redisableKeptBanWithOrigin(store, entry.AuthID, password, originHeaders); errRD != nil {
 			reDisableOK = false
 			if firstErr == nil {
 				firstErr = errRD
@@ -403,8 +412,8 @@ func clearBansMatchingTargetCAS(store *banStore, target *pluginapi.HostAuthFileE
 	return removed, true, reDisableOK && firstErr == nil, storeChanged, firstErr
 }
 
-// redisableKeptBan re-disables a retained ban in CPA and records sync state.
-func redisableKeptBan(store *banStore, authID string) error {
+// redisableKeptBanWithOrigin re-disables a retained ban in CPA and records sync state.
+func redisableKeptBanWithOrigin(store *banStore, authID, password string, originHeaders http.Header) error {
 	if store == nil {
 		return nil
 	}
@@ -412,7 +421,7 @@ func redisableKeptBan(store *banStore, authID string) error {
 	if authID == "" {
 		return nil
 	}
-	if errDisable := disableAuthInCPA(authID); errDisable != nil {
+	if errDisable := disableAuthInCPAWithOrigin(authID, password, originHeaders); errDisable != nil {
 		store.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
 		return errDisable
 	}

@@ -25,6 +25,11 @@ func (e *schedulePersistError) Unwrap() error {
 	return e.err
 }
 
+// scheduleTxnMu serializes user schedule updates and runtime status
+// write-back (read -> build -> persist -> memory commit). Disk I/O must
+// not run while engine.mu is held.
+var scheduleTxnMu sync.Mutex
+
 const (
 	defaultInspectionScheduleIntervalMinutes = 60
 	minInspectionScheduleIntervalMinutes     = 1
@@ -190,8 +195,15 @@ func inspectionScheduleSnapshot() persistedInspectionSchedule {
 }
 
 func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspectionSchedule, error) {
+	// Full user-config transaction: read -> build -> persist -> commit.
+	// Serialized against concurrent POSTs and runtime status write-backs.
+	scheduleTxnMu.Lock()
+	defer scheduleTxnMu.Unlock()
+
 	engine.mu.Lock()
 	prev := normalizePersistedInspectionSchedule(engine.schedule)
+	engine.mu.Unlock()
+
 	cfg := prev
 	if req.Enabled != nil {
 		cfg.Enabled = *req.Enabled
@@ -199,7 +211,6 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	if req.IntervalMinutes != nil {
 		interval, err := normalizeInspectionScheduleInterval(*req.IntervalMinutes)
 		if err != nil {
-			engine.mu.Unlock()
 			return cfg, err
 		}
 		cfg.IntervalMinutes = interval
@@ -207,7 +218,6 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	if req.Workers != nil {
 		workers, err := normalizeWorkers(*req.Workers)
 		if err != nil {
-			engine.mu.Unlock()
 			return cfg, fmt.Errorf("workers must be between %d and %d", minWorkers, maxWorkers)
 		}
 		cfg.Workers = workers
@@ -218,7 +228,6 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	if req.PermissionDeniedAction != nil {
 		action, err := normalizeScheduled403Action(*req.PermissionDeniedAction)
 		if err != nil {
-			engine.mu.Unlock()
 			return cfg, err
 		}
 		cfg.PermissionDeniedAction = action
@@ -226,7 +235,6 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	if req.SpendingLimitAction != nil {
 		action, err := normalizeScheduled402Action(*req.SpendingLimitAction)
 		if err != nil {
-			engine.mu.Unlock()
 			return cfg, err
 		}
 		cfg.SpendingLimitAction = action
@@ -239,9 +247,7 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 		cfg.LastStatus = "disabled"
 	}
 	cfg.LastError = ""
-	// Do not publish to the run loop until schedule.json is durable.
-	engine.mu.Unlock()
-
+	// Persist before publishing to the run loop; no engine.mu during disk I/O.
 	if err := saveInspectionScheduleSync(cfg); err != nil {
 		return prev, &schedulePersistError{err: err}
 	}
@@ -554,8 +560,15 @@ type scheduleRunStats struct {
 }
 
 func setInspectionScheduleRuntimeStatus(status, lastError string, started time.Time, stats scheduleRunStats) {
+	// Same transaction lock as user updates so runtime write-back cannot clobber
+	// a concurrent POST (or vice versa). Disk I/O stays outside engine.mu.
+	scheduleTxnMu.Lock()
+	defer scheduleTxnMu.Unlock()
+
 	engine.mu.Lock()
 	cfg := normalizePersistedInspectionSchedule(engine.schedule)
+	engine.mu.Unlock()
+
 	cfg.LastRunAt = started.Format(time.RFC3339)
 	cfg.LastStatus = status
 	cfg.LastError = strings.TrimSpace(lastError)
@@ -576,9 +589,13 @@ func setInspectionScheduleRuntimeStatus(status, lastError string, started time.T
 	} else {
 		cfg.NextRunAt = ""
 	}
-	engine.schedule = cfg
-	engine.mu.Unlock()
 	if err := saveInspectionScheduleSync(cfg); err != nil {
 		slog.Warn("grok-inspection: failed to persist schedule runtime status", "error", err)
+		// Keep memory consistent with last durable user settings if disk fails:
+		// still commit runtime fields in memory so operators see last run, matching
+		// prior behavior, but under the txn lock so it cannot race a user save.
 	}
+	engine.mu.Lock()
+	engine.schedule = cfg
+	engine.mu.Unlock()
 }

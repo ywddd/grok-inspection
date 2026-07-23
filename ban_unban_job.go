@@ -126,24 +126,31 @@ func releaseUnbanSlot(runID uint64) {
 // commitUnbanAfterEnable deletes the ban only when the store still holds the
 // same revision that this unban targeted. A newer concurrent ban is kept and
 // CPA is re-disabled so local/CPA state stay aligned.
-func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (removed bool) {
+//
+// Returns:
+//   - removed: local ban deleted (true unban success for this id)
+//   - keptNewer: a concurrent newer ban was retained
+//   - err: re-disable failed while keeping the newer ban (caller must treat as failure)
+func commitUnbanAfterEnable(authID string, expectedRev uint64, hadEntry bool) (removed bool, keptNewer bool, err error) {
 	if !hadEntry {
-		return false
+		return false, false, nil
 	}
 	if current, still := activeStore.Get(authID); still {
 		if current.Revision == expectedRev {
-			return activeStore.DeleteIf(authID, expectedRev)
+			return activeStore.DeleteIf(authID, expectedRev), false, nil
 		}
 		if current.Revision > expectedRev {
 			if errDisable := disableAuthInCPA(authID); errDisable != nil {
-				activeStore.UpdateCpaSynced(authID, false)
-			} else {
-				activeStore.UpdateCpaSynced(authID, true)
+				activeStore.UpdateCpaSyncState(authID, false, sanitizeCPASyncError(errDisable))
+				markBanStoreDirty()
+				return false, true, errDisable
 			}
-			return false
+			activeStore.UpdateCpaSyncState(authID, true, "")
+			markBanStoreDirty()
+			return false, true, nil
 		}
 	}
-	return false
+	return false, false, nil
 }
 
 // unbanOneAccount enables one auth in CPA and drops the matching ban revision.
@@ -163,6 +170,8 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 	entry, hadEntry := activeStore.Get(authID)
 	expectedRev := entry.Revision
 	var errEnable error
+	var keptNewer bool
+	var errRedisable error
 	_ = withAuthOp(authID, func() error {
 		var en bool
 		en, errEnable = enableAuthInCPAAllowMissing(authID, password)
@@ -170,8 +179,8 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 			return errEnable
 		}
 		enabled = en
-		removed = commitUnbanAfterEnable(authID, expectedRev, hadEntry)
-		return nil
+		removed, keptNewer, errRedisable = commitUnbanAfterEnable(authID, expectedRev, hadEntry)
+		return errRedisable
 	})
 	if errEnable != nil {
 		unbanJob.mu.Lock()
@@ -185,9 +194,26 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 		unbanJob.mu.Unlock()
 		return false, false, errEnable
 	}
+	if errRedisable != nil {
+		unbanJob.mu.Lock()
+		if unbanJob.runID == runID {
+			unbanJob.failed++
+			unbanJob.done++
+			if len(unbanJob.failures) < 20 {
+				unbanJob.failures = append(unbanJob.failures, authID+": re-disable after concurrent ban: "+sanitizeCPASyncError(errRedisable))
+			}
+		}
+		unbanJob.mu.Unlock()
+		if err := saveActiveStoreErr(); err != nil {
+			return false, false, fmt.Errorf("re-disable failed and ban state persist failed: %w", err)
+		}
+		return false, false, fmt.Errorf("re-disable after concurrent ban: %w", errRedisable)
+	}
 	unbanJob.mu.Lock()
 	if unbanJob.runID == runID {
-		if enabled {
+		if keptNewer {
+			// Newer ban retained + re-disabled: not a successful unban.
+		} else if enabled {
 			unbanJob.enabled++
 		} else {
 			unbanJob.missing++
@@ -196,9 +222,10 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 	}
 	unbanJob.mu.Unlock()
 	if err := saveActiveStoreErr(); err != nil {
-		return enabled, removed, fmt.Errorf("unbanned in CPA but failed to persist ban state: %w", err)
+		return enabled && removed, removed, fmt.Errorf("unbanned in CPA but failed to persist ban state: %w", err)
 	}
-	return enabled, removed, nil
+	// Report true unban success only when the local ban was removed.
+	return enabled && removed, removed, nil
 }
 
 // startUnbanJob unbans selected accounts asynchronously.
@@ -270,13 +297,16 @@ func startUnbanJob(authIDs []string, category, password string) error {
 
 			var enabled bool
 			var errEnable error
+			var keptNewer bool
+			var errRedisable error
+			var removed bool
 			_ = withAuthOp(target.authID, func() error {
 				enabled, errEnable = enableAuthInCPAAllowMissing(target.authID, password)
 				if errEnable != nil {
 					return errEnable
 				}
-				_ = commitUnbanAfterEnable(target.authID, target.rev, true)
-				return nil
+				removed, keptNewer, errRedisable = commitUnbanAfterEnable(target.authID, target.rev, true)
+				return errRedisable
 			})
 			unbanJob.mu.Lock()
 			sameJob := unbanJob.runID == runID
@@ -288,8 +318,19 @@ func startUnbanJob(authIDs []string, category, password string) error {
 					}
 					unbanJob.done++
 				}
+			} else if errRedisable != nil {
+				if sameJob {
+					unbanJob.failed++
+					if len(unbanJob.failures) < 20 {
+						unbanJob.failures = append(unbanJob.failures, target.authID+": re-disable after concurrent ban: "+sanitizeCPASyncError(errRedisable))
+					}
+					unbanJob.done++
+				}
 			} else if sameJob {
-				if enabled {
+				if keptNewer {
+					// Retained newer ban after re-disable: not counted as unban success.
+					_ = removed
+				} else if enabled {
 					unbanJob.enabled++
 				} else {
 					unbanJob.missing++

@@ -31,6 +31,11 @@ func TestMain(m *testing.M) {
 	cfg.PersistState = true
 	currentConfig.Store(cfg)
 
+	// package init() may already have loaded repo data/grok-inspection via
+	// engine.loadFromDisk() before TestMain ran. Reset and reload from the
+	// temp dir so tests never observe repo results/schedule.
+	resetEngineAndStoresForTestIsolation()
+
 	code := m.Run()
 
 	// Drop process defaults before removing the temp tree.
@@ -111,4 +116,28 @@ func TestPackageDataIsolationWriteStaysInTemp(t *testing.T) {
 			t.Fatalf("expected %s: %v", want, err)
 		}
 	}
+}
+
+// resetEngineAndStoresForTestIsolation clears process globals that package init()
+// may have populated from the repo data directory, then reloads from the temp path.
+func resetEngineAndStoresForTestIsolation() {
+	resetStoreIOForTest()
+	activeStore.Clear()
+	engine.mu.Lock()
+	engine.results = nil
+	engine.schedule = defaultInspectionSchedule()
+	engine.workers = defaultWorkers
+	engine.includeDisabled = false
+	engine.onlyDisabled = false
+	engine.total = 0
+	engine.probeDone = 0
+	engine.startedAt = time.Time{}
+	engine.finishedAt = time.Time{}
+	engine.running = false
+	engine.applying = false
+	engine.applyDraining = false
+	engine.stopped = false
+	engine.mu.Unlock()
+	// loadFromDisk now resolves under GROK_INSPECTION_DATA_DIR (empty temp).
+	engine.loadFromDisk()
 }

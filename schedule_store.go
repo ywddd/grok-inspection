@@ -11,6 +11,10 @@ import (
 // runtime status flushes cannot clobber each other on Windows/SMB.
 var scheduleIOMu sync.Mutex
 
+// scheduleIOTestHook is optional; tests may block inside the schedule IO critical
+// section (already under scheduleTxnMu for user/runtime writers) to prove ordering.
+var scheduleIOTestHook func()
+
 func scheduleFilePath() string {
 	return filepath.Join(filepath.Dir(storeFilePath()), "schedule.json")
 }
@@ -21,6 +25,9 @@ func saveInspectionScheduleSync(cfg persistedInspectionSchedule) error {
 	cfg = normalizePersistedInspectionSchedule(cfg)
 	scheduleIOMu.Lock()
 	defer scheduleIOMu.Unlock()
+	if scheduleIOTestHook != nil {
+		scheduleIOTestHook()
+	}
 	path := scheduleFilePath()
 	raw, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

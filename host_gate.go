@@ -71,9 +71,9 @@ var shutdownWaitLogger = func(msg string, args ...any) {
 //  3. tryCancelAbandonedHostCalls is the future host-cancel collaboration hook (no-op).
 //
 // What remains blocked on host/ABI:
-//  - True bounded shutdown without crash needs host-side cancel or unload that
-//    waits for in-flight host callbacks before dlclose. Plugin-only timeout
-//    return is intentionally rejected as unsafe.
+//   - True bounded shutdown without crash needs host-side cancel or unload that
+//     waits for in-flight host callbacks before dlclose. Plugin-only timeout
+//     return is intentionally rejected as unsafe.
 func waitHostCallsForShutdown(diagEvery time.Duration) {
 	tryCancelAbandonedHostCalls()
 	if diagEvery <= 0 {

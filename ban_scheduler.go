@@ -103,6 +103,7 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 			}
 			slog.Warn("grok-inspection: retry disable auth in CPA failed", "auth_id", entry.AuthID, "error", errDisable)
 			store.UpdateCpaSyncState(entry.AuthID, false, sanitizeCPASyncError(errDisable))
+			dirty = true
 			continue
 		}
 		store.UpdateCpaSyncState(entry.AuthID, true, "")
@@ -138,6 +139,8 @@ func restoreExpiredBans(store *banStore, now time.Time) (restored, failed int) {
 					} else {
 						store.UpdateCpaSyncState(authID, true, "")
 					}
+					// Sync-state mutation must flush even when no ban row was deleted.
+					dirty = true
 				}
 				return nil
 			}

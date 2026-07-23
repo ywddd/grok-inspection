@@ -47,10 +47,14 @@ func (s *banStore) Set(entry banEntry) {
 			// A shorter 429 must not rewrite a longer 403/401 manual window into quota.
 			entry.ResetSource = existing.ResetSource
 			if existing.ErrorCode != "" {
+				// When ErrorCode is kept from the longer window, diag must match that
+				// reason — never keep a new quota/401 diag under an old 403 code.
+				if entry.ErrorCode != existing.ErrorCode {
+					entry.ErrorCodeDiag = existing.ErrorCodeDiag
+				} else if existing.ErrorCodeDiag != "" && entry.ErrorCodeDiag == "" {
+					entry.ErrorCodeDiag = existing.ErrorCodeDiag
+				}
 				entry.ErrorCode = existing.ErrorCode
-			}
-			if existing.ErrorCodeDiag != "" && entry.ErrorCodeDiag == "" {
-				entry.ErrorCodeDiag = existing.ErrorCodeDiag
 			}
 		}
 	}

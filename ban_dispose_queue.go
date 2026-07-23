@@ -33,7 +33,9 @@ type banDisposeQueue struct {
 	stopping bool
 	started  bool
 	wg       sync.WaitGroup
-	// testHold / testNoStart are flipped only from _test.go helpers in the same package.
+	// testHold / testNoStart are package-private hooks for tests.
+	// Kept on the production struct because workers must observe hold without a
+	// separate channel redesign; only _test.go flips them. Not used in production paths.
 	testHold    bool
 	testNoStart bool
 	inFlight    int
@@ -108,30 +110,6 @@ func stopBanDisposeWorkers() {
 	// Persist unsynced local bans so restore/retry can finish after reload.
 	if err := saveActiveStoreErr(); err != nil {
 		slog.Warn("grok-inspection: failed to persist ban state on dispose shutdown", "error", err)
-	}
-}
-
-// stopAndWait is used by tests against a private queue instance.
-func (q *banDisposeQueue) stopAndWait() {
-	q.mu.Lock()
-	if q.stopping {
-		started := q.started
-		q.mu.Unlock()
-		if started {
-			q.wg.Wait()
-		}
-		return
-	}
-	q.stopping = true
-	q.testHold = false
-	q.pending = make(map[string]uint64)
-	q.order = q.order[:0]
-	q.queued = 0
-	started := q.started
-	q.cond.Broadcast()
-	q.mu.Unlock()
-	if started {
-		q.wg.Wait()
 	}
 }
 
@@ -221,18 +199,6 @@ func (q *banDisposeQueue) enqueue(authID string, revision uint64) bool {
 	return true
 }
 
-func (q *banDisposeQueue) queuedCount() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.queued
-}
-
-func (q *banDisposeQueue) pendingCount() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.pending)
-}
-
 func applyBanDispose(authID string, expectedRev uint64) {
 	_ = applyBanDisposeWithStore(activeStore, authID, expectedRev)
 }
@@ -283,18 +249,4 @@ func sanitizeCPASyncError(err error) string {
 		msg = msg[:300] + "..."
 	}
 	return msg
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
 }

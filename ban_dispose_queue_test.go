@@ -182,3 +182,54 @@ func installCPAManagementDialForTest(t interface {
 
 // Ensure testing import used when type-asserting TB helpers in some call sites.
 var _ = testing.Short
+
+// ---- test-only queue helpers (not compiled into production) ----
+
+func (q *banDisposeQueue) stopAndWait() {
+	q.mu.Lock()
+	if q.stopping {
+		started := q.started
+		q.mu.Unlock()
+		if started {
+			q.wg.Wait()
+		}
+		return
+	}
+	q.stopping = true
+	q.testHold = false
+	q.pending = make(map[string]uint64)
+	q.order = q.order[:0]
+	q.queued = 0
+	started := q.started
+	q.cond.Broadcast()
+	q.mu.Unlock()
+	if started {
+		q.wg.Wait()
+	}
+}
+
+func (q *banDisposeQueue) queuedCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.queued
+}
+
+func (q *banDisposeQueue) pendingCount() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return len(q.pending)
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}

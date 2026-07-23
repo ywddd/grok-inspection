@@ -259,8 +259,8 @@ func TestEnableCASUpdatesResultDisabledAfterRedisable(t *testing.T) {
 	close(releaseRedisable)
 	select {
 	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("enable: %v", err)
+		if err == nil || !errors.Is(err, errBanSupersededByNewerRevision) {
+			t.Fatalf("enable must return ban conflict when re-disabled after concurrent ban, got %v", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("enable hung")

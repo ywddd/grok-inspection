@@ -29,9 +29,13 @@ type unbanJobState struct {
 
 var unbanJob = &unbanJobState{}
 
-// errUnbanSupersededByNewerBan is returned when enable succeeded but a concurrent
-// newer ban was retained (and re-disabled). Callers must not report missing=true.
-var errUnbanSupersededByNewerBan = errors.New("unban_conflict: concurrent ban retained")
+// errBanSupersededByNewerRevision is returned when an enable/unban CPA mutation
+// succeeded but a concurrent newer ban was retained and re-disabled.
+// Callers must treat this as failure (not success, not missing).
+var errBanSupersededByNewerRevision = errors.New("ban_conflict: concurrent ban retained")
+
+// errUnbanSupersededByNewerBan is the historical alias used by unban paths/tests.
+var errUnbanSupersededByNewerBan = errBanSupersededByNewerRevision
 
 func unbanJobStatus() map[string]any {
 	unbanJob.mu.Lock()

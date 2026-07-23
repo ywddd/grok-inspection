@@ -130,10 +130,17 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 			_ = removed
 			banStateChanged = storeChanged
 			// Only mark the row disabled when a local ban remains AND CPA re-disable
-			// succeeded. If re-disable failed, CPA may still be enabled: keep
-			// Disabled=false so recommendAction still suggests disable, and return err.
-			if localBanRemains && cpaDisabledOK && errCAS == nil {
-				resultDisabled = true
+			// succeeded. That is NOT enable success: return a conflict sentinel so
+			// single-row/bulk UI count a failure. If re-disable failed, keep the
+			// real error, Disabled=false, and recommend disable.
+			if localBanRemains {
+				if cpaDisabledOK && errCAS == nil {
+					resultDisabled = true
+					errCAS = errBanSupersededByNewerRevision
+				} else {
+					resultDisabled = false
+					// keep errCAS (redisable HTTP / sync failure)
+				}
 			} else {
 				resultDisabled = false
 			}

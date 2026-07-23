@@ -1116,6 +1116,16 @@ func renderUIPage(pluginID string) []byte {
           if (cat[key] && m === cat[key]) return reasonText(key);
         }
       }
+      // enable/unban superseded by concurrent ban (sentinel Error() text)
+      const banConflict = {
+        en: 'ban_conflict: concurrent ban retained',
+        enLegacy: 'unban_conflict: concurrent ban retained',
+        zh: '启用被并发自动禁用抢占，账号已重新禁用',
+        enOut: 'enable superseded by concurrent ban; account re-disabled'
+      };
+      if (m === banConflict.en || m === banConflict.enLegacy || m === banConflict.zh || m === banConflict.enOut) {
+        return lang === 'en' ? banConflict.enOut : banConflict.zh;
+      }
       // auth file name missing (exact, no account)
       const missing = {
         zh: '账号缺少 auth 文件名',

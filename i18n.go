@@ -239,6 +239,11 @@ var messages = map[string]map[Lang]string{
 		LangZH: "管理密码不可用",
 		LangEN: "CPA management password is unavailable",
 	},
+	"ban_conflict_superseded": {
+		LangZH: "启用被并发自动禁用抢占，账号已重新禁用",
+		LangEN: "enable superseded by concurrent ban; account re-disabled",
+	},
+
 	"unsupported_action": {
 		LangZH: "不支持的操作 %q",
 		LangEN: "unsupported action %q",
@@ -519,7 +524,7 @@ func matchKnownActionError(lang Lang, msg string) (string, bool) {
 
 	// Exact fixed phrases (no args).
 	for _, key := range []string{
-		"stopped", "list_accounts_timeout", "auth_file_name_missing", "mgmt_password_unavailable",
+		"stopped", "list_accounts_timeout", "auth_file_name_missing", "mgmt_password_unavailable", "ban_conflict_superseded",
 	} {
 		for _, src := range []Lang{LangZH, LangEN} {
 			cand := messages[key][src]
@@ -528,6 +533,16 @@ func matchKnownActionError(lang Lang, msg string) (string, bool) {
 			}
 		}
 	}
+	// Sentinel conflict errors from enable/unban CAS (raw Error() text).
+	for _, raw := range []string{
+		errBanSupersededByNewerRevision.Error(),
+		"unban_conflict: concurrent ban retained", // legacy string if still in logs/UI
+	} {
+		if msg == raw {
+			return T(lang, "ban_conflict_superseded"), true
+		}
+	}
+
 	// Long EN password form includes an English parenthetical hint.
 	enPw := messages["mgmt_password_unavailable"][LangEN]
 	zhPw := messages["mgmt_password_unavailable"][LangZH]

@@ -231,3 +231,36 @@ func TestUIPreviewMetricAlignment(t *testing.T) {
 		t.Fatal("mobile schedule layout rules missing")
 	}
 }
+
+func TestUIHelpPopoverYieldsToModeTabs(t *testing.T) {
+	page := string(renderUIPage(pluginName))
+	css := extractUICSSForHygiene(page)
+
+	// Switching tabs must close help (already in switchTab).
+	if !strings.Contains(page, "function switchTab(name)") || !strings.Contains(page, "closeHelpPopover()") {
+		t.Fatal("switchTab must close help popover")
+	}
+	// Overlay hit-testing so a click that paints over mode tabs still switches.
+	for _, marker := range []string{
+		"function tabFromPoint",
+		"elementsFromPoint",
+		"pointerdown",
+		"closeHelpPopover()",
+		"switchTab(tabEl.dataset.tab)",
+	} {
+		if !strings.Contains(page, marker) {
+			t.Fatalf("help/tab interaction missing %q", marker)
+		}
+	}
+	// Escape still closes help.
+	if !strings.Contains(page, `ev.key === 'Escape'`) && !strings.Contains(page, `ev.key === "Escape"`) {
+		t.Fatal("Escape must still close help popover")
+	}
+	// Mode tabs stack above the help popover so they remain hittable when geometries overlap.
+	if !strings.Contains(css, "z-index:60") {
+		t.Fatal("mode-tabs need z-index above help popover")
+	}
+	if !strings.Contains(css, ".help-popover") || !strings.Contains(css, "z-index:50") {
+		t.Fatal("help popover z-index contract missing")
+	}
+}

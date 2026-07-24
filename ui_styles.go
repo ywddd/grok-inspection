@@ -60,6 +60,7 @@ const uiCSS = `
           padding:12px 14px; border:1px solid var(--line-strong); border-radius:8px; background:var(--surface);
           box-shadow:0 12px 32px rgba(15,23,42,.14); color:var(--muted); font-size:13px;
           opacity:0; visibility:hidden; transform:translateY(-4px); transition:.15s ease;
+          max-height:min(50vh, 280px); overflow-y:auto;
         }
         .help-popover[hidden] { display:none !important; }
         .help-popover.open { opacity:1; visibility:visible; transform:translateY(0); display:block; }
@@ -93,6 +94,7 @@ const uiCSS = `
 
         .mode-tabs, .grok-inspection-page .tabs {
           display:flex; align-items:stretch; padding:10px 12px 0; gap:4px; min-width:0; max-width:100%;
+          position:relative; z-index:60;
         }
         .tab, .mode-tab, button.tab, button.mode-tab {
           min-height:48px; min-width:0; max-width:100%; display:flex; align-items:center; gap:9px;
@@ -413,7 +415,11 @@ const uiCSS = `
           h1 { font-size:20px; }
           .head-actions { padding-top:22px; }
           .lang-ctl .select-compact, .lang-ctl select { width:72px; min-width:72px; }
-          .help-popover { left:0; right:auto; width:min(360px, calc(100vw - 24px)); }
+          .help-popover {
+            left:0; right:auto; width:min(320px, calc(100vw - 24px));
+            max-height:min(36vh, 200px); overflow-y:auto;
+          }
+          .mode-tabs, .grok-inspection-page .tabs { position:relative; z-index:60; }
           .panel, .autoban-control, #panel-autoban { border-radius:7px; }
           .access-row { flex-direction:column; align-items:flex-start; gap:6px; }
           #managementKey, .access-value { width:100%; min-width:0; }

@@ -72,6 +72,21 @@ const uiScriptBan = `  function heroTextFor(tab) {
       switchTab(tab.dataset.tab);
     });
   });
+  function tabFromPoint(x, y, preferEl) {
+    if (preferEl && preferEl.closest) {
+      const direct = preferEl.closest('.tab, .mode-tab, [role="tab"][data-tab]');
+      if (direct && direct.dataset && direct.dataset.tab) return direct;
+    }
+    if (typeof document.elementsFromPoint !== 'function') return null;
+    const stack = document.elementsFromPoint(x, y) || [];
+    for (let i = 0; i < stack.length; i++) {
+      const el = stack[i];
+      if (!el || !el.closest) continue;
+      const tab = el.closest('.tab, .mode-tab, [role="tab"][data-tab]');
+      if (tab && tab.dataset && tab.dataset.tab) return tab;
+    }
+    return null;
+  }
   (function wireHelpPopover() {
     const btn = document.getElementById('helpBtn');
     const pop = document.getElementById('helpPopover');
@@ -89,12 +104,23 @@ const uiScriptBan = `  function heroTextFor(tab) {
         closeHelpPopover();
       }
     });
-    document.addEventListener('click', (ev) => {
+    // Capture phase: even when the help popover paints over mode tabs (mobile),
+    // a click on a tab must close help and switch. Escape / outside still close.
+    document.addEventListener('pointerdown', (ev) => {
       if (pop.hidden) return;
       const target = ev.target;
-      if (btn.contains(target) || pop.contains(target)) return;
+      if (btn.contains(target)) return;
+      const tabEl = tabFromPoint(ev.clientX, ev.clientY, target);
+      if (tabEl) {
+        closeHelpPopover();
+        switchTab(tabEl.dataset.tab);
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      if (pop.contains(target)) return;
       closeHelpPopover();
-    });
+    }, true);
     document.addEventListener('keydown', (ev) => {
       if (ev.key === 'Escape') closeHelpPopover();
     });

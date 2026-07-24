@@ -109,7 +109,8 @@ const uiScriptTable = `  function filtered() {
     ];
     $('summary').innerHTML = cards.map(([key,label,value]) => {
       const active = (key === 'total' && state.filter === 'all') || state.filter === key;
-      return '<div class="card' + (active ? ' active' : '') + '" data-filter="' + key + '"><div class="k">' + label + '</div><div class="v">' + value + '</div></div>';
+      const warn = (key === 'quota_exhausted' && Number(value) > 0) ? ' warning' : '';
+      return '<button type="button" class="metric card' + (active ? ' active' : '') + warn + '" data-filter="' + key + '"><span class="metric-label k">' + label + '</span><strong class="metric-value v">' + value + '</strong></button>';
     }).join('');
     $('summary').querySelectorAll('[data-filter]').forEach((el) => el.onclick = () => {
       state.filter = el.dataset.filter === 'total' ? 'all' : el.dataset.filter;
@@ -139,12 +140,14 @@ const uiScriptTable = `  function filtered() {
         // Every row always offers toggle + delete (not only classification-suggested action).
         const actionBtns = hasManagementKey()
           ? '<div class="row-actions">' +
-              '<button type="button" data-act="' + toggleAct + '" ' + (busy ? 'disabled' : '') + '>' + toggleLabel + '</button>' +
-              '<button type="button" class="danger" data-act="delete" ' + (busy ? 'disabled' : '') + '>' + t('action_delete') + '</button>' +
+              (typeof iconBtn === 'function'
+                ? (iconBtn(toggleAct, toggleLabel, busy) + iconBtn('delete', t('action_delete'), busy))
+                : ('<button type="button" data-act="' + toggleAct + '" ' + (busy ? 'disabled' : '') + '>' + toggleLabel + '</button>' +
+                   '<button type="button" class="danger" data-act="delete" ' + (busy ? 'disabled' : '') + '>' + t('action_delete') + '</button>')) +
             '</div>'
           : '-';
         return '<tr data-key="' + escapeHtml(key) + '"' + (busy ? ' class="row-busy"' : '') + '>' +
-          '<td class="col-name">' + escapeHtml(r.name) + '</td>' +
+          '<td class="col-name account">' + escapeHtml(r.name) + '</td>' +
           '<td class="col-status">' + pill(r.disabled ? t('disabled') : t('enabled'), r.disabled ? '#b45309' : '#047857') + '</td>' +
           '<td class="col-result">' + pill(classLabel[r.classification] || r.classification || '-', color[r.classification] || '#475569') + '</td>' +
           '<td class="col-http">' + (r.http_status || '-') + '</td>' +
@@ -194,7 +197,7 @@ const uiScriptTable = `  function filtered() {
     $('incrBtn').disabled = !hasManagementKey() || busy || !hasResults;
     if ($('filterRunBtn')) {
       $('filterRunBtn').disabled = !hasManagementKey() || busy || state.filter === 'all' || filterCount === 0;
-      $('filterRunBtn').textContent = filterCount ? (t('inspect_category') + ' (' + filterCount + ')') : t('inspect_category');
+      if (typeof setBtnLabel === 'function') setBtnLabel($('filterRunBtn'), filterCount ? (t('inspect_category') + ' (' + filterCount + ')') : t('inspect_category')); else $('filterRunBtn').textContent = filterCount ? (t('inspect_category') + ' (' + filterCount + ')') : t('inspect_category');
     }
     if ($('sampleBtn')) {
       $('sampleBtn').disabled = !hasManagementKey() || busy;
@@ -205,13 +208,21 @@ const uiScriptTable = `  function filtered() {
     $('batchDisableBtn').disabled = !hasManagementKey() || busy || disableCount === 0;
     $('batchEnableBtn').disabled = !hasManagementKey() || busy || enableCount === 0;
     $('batchDeleteBtn').disabled = !hasManagementKey() || busy || filteredCount === 0;
-    $('applyBtn').textContent = snap.applying
+    { const applyText = snap.applying
       ? (t('running') + ' ' + (snap.apply_done||0) + '/' + (snap.apply_total||0))
       : (actionCount ? (t('apply_suggested') + ' (' + actionCount + ')') : t('apply_suggested'));
-    $('batchExportBtn').textContent = filteredCount ? (t('bulk_export') + ' (' + filteredCount + ')') : t('bulk_export');
-    $('batchDisableBtn').textContent = disableCount ? (t('bulk_disable') + ' (' + disableCount + ')') : t('bulk_disable');
-    $('batchEnableBtn').textContent = enableCount ? (t('bulk_enable') + ' (' + enableCount + ')') : t('bulk_enable');
-    $('batchDeleteBtn').textContent = filteredCount ? (t('bulk_delete') + ' (' + filteredCount + ')') : t('bulk_delete');
+      if (typeof setBtnLabel === 'function') setBtnLabel($('applyBtn'), applyText); else $('applyBtn').textContent = applyText; }
+    if (typeof setBtnLabel === 'function') {
+      setBtnLabel($('batchExportBtn'), filteredCount ? (t('bulk_export') + ' (' + filteredCount + ')') : t('bulk_export'));
+      setBtnLabel($('batchDisableBtn'), disableCount ? (t('bulk_disable') + ' (' + disableCount + ')') : t('bulk_disable'));
+      setBtnLabel($('batchEnableBtn'), enableCount ? (t('bulk_enable') + ' (' + enableCount + ')') : t('bulk_enable'));
+      setBtnLabel($('batchDeleteBtn'), filteredCount ? (t('bulk_delete') + ' (' + filteredCount + ')') : t('bulk_delete'));
+    } else {
+      $('batchExportBtn').textContent = filteredCount ? (t('bulk_export') + ' (' + filteredCount + ')') : t('bulk_export');
+      $('batchDisableBtn').textContent = disableCount ? (t('bulk_disable') + ' (' + disableCount + ')') : t('bulk_disable');
+      $('batchEnableBtn').textContent = enableCount ? (t('bulk_enable') + ' (' + enableCount + ')') : t('bulk_enable');
+      $('batchDeleteBtn').textContent = filteredCount ? (t('bulk_delete') + ' (' + filteredCount + ')') : t('bulk_delete');
+    }
     if (!hasManagementKey()) {
       setProgress(t('need_key_load'), false);
     } else if (snap.unban && snap.unban.running) {

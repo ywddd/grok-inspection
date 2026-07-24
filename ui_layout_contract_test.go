@@ -17,7 +17,7 @@ func TestUILayoutBilingualContract(t *testing.T) {
 		`data-tab="inspect"`,
 		`data-tab="autoban"`,
 		`class="tab active"`,
-		`class="panel active" id="panel-inspect"`,
+		`id="panel-inspect"`,
 		`switchTab('inspect')`,
 	} {
 		if !strings.Contains(page, marker) {
@@ -90,7 +90,7 @@ func TestUILayoutBilingualContract(t *testing.T) {
 	for _, marker := range []string{
 		`.summary.ban-summary { grid-template-columns:repeat(6,minmax(0,1fr))`,
 		`@media (min-width:761px) and (max-width:1220px)`,
-		`@media (max-width:760px)`,
+		`@media (max-width:640px)`,
 		`.help-popover`,
 		`html[data-grok-theme="dark"] .grok-inspection-page .tab.active`,
 		`html[data-grok-theme="dark"] .grok-inspection-page th`,
@@ -121,8 +121,8 @@ func TestUILayoutBilingualContract(t *testing.T) {
 		".grok-inspection-page .tabs {",
 		`html[data-grok-theme="dark"] .grok-inspection-page .tab.active`,
 	})
-	if n := countCSSMedia(page, "max-width:760px"); n != 1 {
-		t.Fatalf("want exactly 1 max-width:760px media block, got %d", n)
+	if n := countCSSMedia(page, "max-width:640px"); n != 1 {
+		t.Fatalf("want exactly 1 max-width:640px media block, got %d", n)
 	}
 
 	zh := extractI18NPack(page, "zh")
@@ -151,7 +151,7 @@ func TestUILayoutBilingualContract(t *testing.T) {
 	}
 }
 
-// cssOutsideMobile returns the UI CSS with all max-width:760px media blocks removed.
+// cssOutsideMobile returns the UI CSS with all max-width:640px media blocks removed.
 func cssOutsideMobile(page string) string {
 	css := extractUICSS(page)
 	var b strings.Builder
@@ -191,7 +191,7 @@ func cssOutsideMobile(page string) string {
 			k++
 		}
 	doneMedia:
-		if strings.Contains(header, "max-width:760px") {
+		if strings.Contains(header, "max-width:640px") {
 			// drop mobile media block
 			i = k
 			continue
@@ -263,7 +263,7 @@ func assertCSSSelectorsOutsideMobile(t *testing.T, page string, selectors []stri
 			t.Fatalf("CSS missing selector/snippet %q", sel)
 		}
 		if !strings.Contains(outside, sel) {
-			t.Fatalf("desktop/base CSS selector %q must not live only inside max-width:760px media", sel)
+			t.Fatalf("desktop/base CSS selector %q must not live only inside max-width:640px media", sel)
 		}
 		// First occurrence must also be outside mobile: compare positions in full CSS
 		// by ensuring the first match index is not inside a mobile media span.
@@ -272,7 +272,7 @@ func assertCSSSelectorsOutsideMobile(t *testing.T, page string, selectors []stri
 			t.Fatalf("CSS missing selector/snippet %q", sel)
 		}
 		if cssIndexInsideMobileMedia(css, first) {
-			t.Fatalf("first occurrence of %q is inside max-width:760px media; desktop would miss it", sel)
+			t.Fatalf("first occurrence of %q is inside max-width:640px media; desktop would miss it", sel)
 		}
 	}
 }
@@ -309,7 +309,7 @@ func cssIndexInsideMobileMedia(css string, pos int) bool {
 			k++
 		}
 	done:
-		if strings.Contains(header, "max-width:760px") && pos >= idx && pos < k {
+		if strings.Contains(header, "max-width:640px") && pos >= idx && pos < k {
 			return true
 		}
 		i = k

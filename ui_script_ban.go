@@ -43,18 +43,30 @@ const uiScriptBan = `  function heroTextFor(tab) {
   function switchTab(name) {
     if (name !== 'inspect' && name !== 'autoban') name = 'inspect';
     currentTab = name;
-    document.querySelectorAll('.tab').forEach((el) => {
+    document.querySelectorAll('.tab, .mode-tab').forEach((el) => {
       const on = el.dataset.tab === name;
       el.classList.toggle('active', on);
       el.setAttribute('aria-selected', on ? 'true' : 'false');
       el.tabIndex = on ? 0 : -1;
     });
-    document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'panel-' + name));
+    const inspectOn = name === 'inspect';
+    document.querySelectorAll('.inspection-only').forEach((el) => {
+      el.hidden = !inspectOn;
+      el.classList.toggle('active', inspectOn);
+    });
+    document.querySelectorAll('.autoban-only').forEach((el) => {
+      el.hidden = inspectOn;
+      el.classList.toggle('active', !inspectOn);
+    });
+    const pi = document.getElementById('panel-inspect');
+    const pa = document.getElementById('panel-autoban');
+    if (pi) { pi.classList.toggle('active', inspectOn); pi.hidden = !inspectOn; }
+    if (pa) { pa.classList.toggle('active', !inspectOn); pa.hidden = inspectOn; }
     updateModeHelp();
     closeHelpPopover();
     if (name === 'autoban') loadBans();
   }
-  document.querySelectorAll('.tab').forEach((tab) => {
+  document.querySelectorAll('.tab, .mode-tab').forEach((tab) => {
     tab.addEventListener('click', (ev) => {
       ev.preventDefault();
       switchTab(tab.dataset.tab);
@@ -177,15 +189,21 @@ const uiScriptBan = `  function heroTextFor(tab) {
     if (btn) {
       const n = filtered.length;
       btn.disabled = n === 0;
-      btn.textContent = f === 'all'
+      const unbanLabel = f === 'all'
         ? (t('ban_unban_filter') + (n ? ' (' + n + ')' : ''))
         : (t('ban_unban_filter_named_prefix') + banFilterLabel(f) + t('ban_unban_filter_named_suffix') + (n ? ' (' + n + ')' : ''));
+      if (typeof setBtnLabel === 'function') setBtnLabel(btn, unbanLabel); else btn.textContent = unbanLabel;
     }
     const hint = document.getElementById('banFilterHint');
-    if (hint) {
-      hint.textContent = f === 'all'
-        ? t('ban_filter_hint_all')
-        : (t('ban_filter_current_prefix') + banFilterLabel(f) + t('ban_filter_current_mid') + filtered.length + t('ban_filter_current_suffix'));
+    const poolCtx = document.getElementById('banPoolContext');
+    const filterText = f === 'all'
+      ? t('ban_filter_hint_all')
+      : (t('ban_filter_current_prefix') + banFilterLabel(f) + t('ban_filter_current_mid') + filtered.length + t('ban_filter_current_suffix'));
+    if (hint) hint.textContent = filterText;
+    if (poolCtx) {
+      poolCtx.textContent = f === 'all'
+        ? (t('ban_all') + ' · ' + filtered.length + ' ' + t('accounts_word').trim())
+        : (banFilterLabel(f) + ' · ' + filtered.length + ' ' + t('accounts_word').trim());
     }
   }
   function setBanFilter(f) {
@@ -307,9 +325,11 @@ async function loadBans() {
       const banner = document.getElementById('banUnsyncedBanner');
       if (banner) {
         if (unsynced > 0) {
+          banner.hidden = false;
           banner.style.display = 'block';
           banner.textContent = t('ban_unsynced_banner_prefix') + unsynced + t('ban_unsynced_banner_suffix');
         } else {
+          banner.hidden = true;
           banner.style.display = 'none';
           banner.textContent = '';
         }
@@ -373,7 +393,7 @@ async function loadBans() {
         t('unban_filter_confirm_body_prefix') + label + t('unban_filter_confirm_body_mid') + list.length + t('unban_filter_confirm_body_suffix')
       );
       if (!ok) return;
-      if (btn) { btn.disabled = true; btn.textContent = t('unban_in_progress'); }
+      if (btn) { btn.disabled = true; if (typeof setBtnLabel === 'function') setBtnLabel(btn, t('unban_in_progress')); else btn.textContent = t('unban_in_progress'); }
       const ids = list.map((b) => String(b.auth_id || '').trim()).filter(Boolean);
       const body = (banState.filter && banState.filter !== 'all')
         ? { category: banState.filter, auth_ids: ids }

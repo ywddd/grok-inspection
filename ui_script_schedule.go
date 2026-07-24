@@ -10,7 +10,7 @@ const uiScriptSchedule = `  const classLabel = {
     reauth: '#b91c1c', model_unavailable: '#475569', probe_error: '#b91c1c', unknown: '#475569'
   };
   function pill(text, c) {
-    return '<span class="pill" style="background:' + c + '1a;color:' + c + '">' + escapeHtml(text) + '</span>';
+    return '<span class="badge pill" style="background:' + c + '1a;color:' + c + '">' + escapeHtml(text) + '</span>';
   }
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));

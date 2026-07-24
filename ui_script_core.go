@@ -187,18 +187,39 @@ const uiScriptCore = `  const WORKERS_MIN = 1;
       if (hasManagementKey()) { refresh(); loadSchedule(); }
     }
   }, ms));
-  function syncKeyHint() {
+  function setBtnLabel(el, text) {
+    if (!el) return;
+    const label = el.querySelector('span[data-i18n], span:not(.ico):not(.sr-only)');
+    if (label) label.textContent = text;
+    else el.textContent = text;
+  }
+  const ICO_SVG = {
+    ban: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>',
+    check: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>',
+    trash: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>',
+    unlock: '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
+  };
+  function iconBtn(act, title, disabled) {
+    const isDel = act === 'delete';
+    const isEn = act === 'enable';
+    const svg = isDel ? ICO_SVG.trash : (isEn ? ICO_SVG.check : (act === 'unban' ? ICO_SVG.unlock : ICO_SVG.ban));
+    return '<button type="button" class="icon-btn' + (isDel ? ' danger-icon' : '') + '" data-act="' + act + '" title="' + escapeHtml(title) + '" aria-label="' + escapeHtml(title) + '"' + (disabled ? ' disabled' : '') + '>' + svg + '</button>';
+  }
+    function syncKeyHint() {
     const hint = $('keyHint');
+    if (hint && hint.classList) { /* theme-aware key state */ }
     if (!hint) return;
+    hint.classList.add('key-state');
+    hint.classList.remove('ok');
     if (hasManagementKey() && keySource === 'panel') {
-      hint.textContent = t('key_from_panel');
+      hint.textContent = t('key_from_panel'); hint.classList.add('ok');
       keyInput.placeholder = t('key_autofill');
     } else if (hasManagementKey() && keySource === 'plugin') {
-      hint.textContent = t('key_local');
+      hint.textContent = t('key_local'); hint.classList.add('ok');
     } else if (hasManagementKey()) {
-      hint.textContent = t('key_manual');
+      hint.textContent = t('key_manual'); hint.classList.add('ok');
     } else {
-      hint.textContent = t('key_missing');
+      hint.textContent = t('key_missing'); hint.classList.remove('ok');
       keyInput.placeholder = t('key_label');
     }
   }

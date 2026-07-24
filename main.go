@@ -14,7 +14,7 @@ import (
 const (
 	pluginName            = "grok-inspection"
 	pluginDisplayName     = "Grok 账号巡检"
-	pluginVersion         = "0.1.15"
+	pluginVersion         = "0.1.16"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -85,7 +85,7 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 	return pluginapi.ManagementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/status", Description: "Get Grok inspection status."},
-			{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full, incremental, or classify-scoped Grok inspection job."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/start", Description: "Start a full, incremental, sample, or classify-scoped Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/stop", Description: "Stop the current Grok inspection job."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/apply", Description: "Apply recommended disable/enable/delete actions asynchronously."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/action", Description: "Disable, enable, or delete one Grok credential asynchronously."},

@@ -73,6 +73,22 @@ var messages = map[string]map[Lang]string{
 		LangZH: "分类巡检不能与增量巡检同时使用",
 		LangEN: "Category inspection cannot be combined with incremental inspection",
 	},
+	"sample_with_incremental": {
+		LangZH: "抽检不能与增量巡检同时使用",
+		LangEN: "Sample inspection cannot be combined with incremental inspection",
+	},
+	"sample_params_required": {
+		LangZH: "抽检请填写数量或比例",
+		LangEN: "Sample inspection requires a count or percent",
+	},
+	"sample_count_invalid": {
+		LangZH: "抽检数量无效",
+		LangEN: "Invalid sample count",
+	},
+	"sample_percent_invalid": {
+		LangZH: "抽检比例须在 0-100 之间",
+		LangEN: "Sample percent must be between 0 and 100",
+	},
 	"incremental_needs_results": {
 		LangZH: "增量巡检需要已有结果，请先完整巡检",
 		LangEN: "Incremental inspection requires existing results; run a full inspection first",
@@ -307,7 +323,7 @@ func localizeKnownReason(lang Lang, reason string) string {
 		switch key {
 		case "menu_name", "menu_desc", "workers_range", "already_running", "busy_row_action",
 			"busy_unban", "busy_inspection", "busy_apply", "busy_generic",
-			"category_with_incremental", "incremental_needs_results", "category_needs_results",
+			"category_with_incremental", "sample_with_incremental", "sample_params_required", "sample_count_invalid", "sample_percent_invalid", "incremental_needs_results", "category_needs_results",
 			"no_accounts_in_category", "list_accounts_failed", "list_accounts_timeout",
 			"http_probe_timeout", "probe_timeout",
 			"act_disable", "act_enable", "act_delete", "apply_delete_batch",

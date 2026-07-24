@@ -3,20 +3,55 @@ package main
 const uiScriptBan = `  function heroTextFor(tab) {
     return tab === 'autoban' ? t('hero_autoban') : t('subtitle');
   }
+  function helpParagraphKeys(tab) {
+    return tab === 'autoban'
+      ? ['help_autoban_p1', 'help_autoban_p2']
+      : ['help_inspect_p1', 'help_inspect_p2', 'help_inspect_p3'];
+  }
+  function helpHTMLFor(tab) {
+    const keys = helpParagraphKeys(tab);
+    const parts = keys.map((k) => {
+      const val = t(k);
+      return val ? ('<p>' + val + '</p>') : '';
+    }).filter(Boolean);
+    if (parts.length) return parts.join('');
+    const plain = heroTextFor(tab) || heroTextFor('inspect') || '';
+    return plain ? ('<p>' + plain + '</p>') : '';
+  }
+  function closeHelpPopover() {
+    const pop = document.getElementById('helpPopover');
+    const btn = document.getElementById('helpBtn');
+    if (pop) {
+      pop.hidden = true;
+      pop.classList.remove('open');
+    }
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+  function updateModeHelp() {
+    const sub = document.getElementById('heroSub');
+    const btn = document.getElementById('helpBtn');
+    const isBan = currentTab === 'autoban';
+    if (sub) sub.innerHTML = helpHTMLFor(currentTab);
+    if (btn) {
+      const title = isBan ? t('help_autoban_title') : t('help_title');
+      btn.setAttribute('title', title);
+      btn.setAttribute('aria-label', title);
+    }
+  }
   let banState = { bans: [], page: 1, pageSize: 20, meta: {}, filter: 'all' };
   let currentTab = 'inspect';
   function switchTab(name) {
     if (name !== 'inspect' && name !== 'autoban') name = 'inspect';
     currentTab = name;
-    document.querySelectorAll('.tab').forEach((t) => {
-      const on = t.dataset.tab === name;
-      t.classList.toggle('active', on);
-      t.setAttribute('aria-selected', on ? 'true' : 'false');
-      t.tabIndex = on ? 0 : -1;
+    document.querySelectorAll('.tab').forEach((el) => {
+      const on = el.dataset.tab === name;
+      el.classList.toggle('active', on);
+      el.setAttribute('aria-selected', on ? 'true' : 'false');
+      el.tabIndex = on ? 0 : -1;
     });
     document.querySelectorAll('.panel').forEach((p) => p.classList.toggle('active', p.id === 'panel-' + name));
-    const sub = document.getElementById('heroSub');
-    if (sub) sub.textContent = heroTextFor(name) || heroTextFor('inspect');
+    updateModeHelp();
+    closeHelpPopover();
     if (name === 'autoban') loadBans();
   }
   document.querySelectorAll('.tab').forEach((tab) => {
@@ -25,6 +60,33 @@ const uiScriptBan = `  function heroTextFor(tab) {
       switchTab(tab.dataset.tab);
     });
   });
+  (function wireHelpPopover() {
+    const btn = document.getElementById('helpBtn');
+    const pop = document.getElementById('helpPopover');
+    if (!btn || !pop) return;
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const open = pop.hidden;
+      if (open) {
+        updateModeHelp();
+        pop.hidden = false;
+        pop.classList.add('open');
+        btn.setAttribute('aria-expanded', 'true');
+      } else {
+        closeHelpPopover();
+      }
+    });
+    document.addEventListener('click', (ev) => {
+      if (pop.hidden) return;
+      const target = ev.target;
+      if (btn.contains(target) || pop.contains(target)) return;
+      closeHelpPopover();
+    });
+    document.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Escape') closeHelpPopover();
+    });
+  })();
   // Default: 账号巡检 selected and sticky after blur/clicks elsewhere.
   switchTab('inspect');
 

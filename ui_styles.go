@@ -31,12 +31,12 @@ const uiCSS = `    :root { color-scheme: light; }
     button.soft { border-color:#c7d2fe; background:#eef2ff; color:#3730a3; font-weight:650; }
     button.danger { border-color:#fecaca; background:#fef2f2; color:#b91c1c; font-weight:650; }
     button:disabled { opacity:.55; cursor:not-allowed; }
-    .summary { display:grid; grid-template-columns:repeat(6,minmax(100px,1fr)); gap:10px; margin-bottom:12px; }
-    .summary.ban-summary { grid-template-columns:repeat(5,minmax(0,1fr)); width:100%; min-width:0; }
-    .card { background:#fff; border:1px solid #e2e8f0; border-radius:10px; padding:12px; box-shadow:0 1px 2px rgba(15,23,42,.04); cursor:pointer; min-width:0; }
-    .card.active { outline:2px solid #2563eb; }
-    .card .k { color:#64748b; font-size:12px; line-height:1.3; overflow-wrap:anywhere; word-break:break-word; }
-    .card .v { margin-top:4px; font-size:22px; font-weight:750; }
+    .summary { display:grid; grid-template-columns:repeat(6,minmax(100px,1fr)); gap:8px; margin:12px 0; width:100%; min-width:0; }
+    .summary.ban-summary { grid-template-columns:repeat(6,minmax(0,1fr)); width:100%; min-width:0; }
+    .card { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:11px 12px; box-shadow:0 1px 2px rgba(15,23,42,.04); cursor:pointer; min-width:0; min-height:84px; display:flex; flex-direction:column; justify-content:space-between; box-sizing:border-box; }
+    .card.active { outline:2px solid #2563eb; border-color:#2563eb; }
+    .card .k { color:#64748b; font-size:12px; line-height:1.35; min-height:34px; overflow-wrap:break-word; word-break:normal; hyphens:auto; }
+    .card .v { margin-top:4px; font-size:22px; font-weight:750; line-height:1.1; }
     .bar { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:10px; align-items:center; }
     .actions-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     .actions-row .hint { font-size:12px; color:var(--muted,#64748b); }
@@ -62,7 +62,7 @@ const uiCSS = `    :root { color-scheme: light; }
     .modal-msg { font-size:13px; line-height:1.6; color:#334155; white-space:pre-wrap; margin-bottom:16px; }
     .modal-actions { display:flex; justify-content:flex-end; gap:8px; }
     .modal-actions button { min-width:76px; touch-action:manipulation; -webkit-tap-highlight-color:transparent; }
-    .table-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:10px; overflow:hidden; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+    .table-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; box-shadow:0 1px 2px rgba(15,23,42,.04); }
     .table-wrap .table-scroll { overflow:auto; -webkit-overflow-scrolling:touch; }
     table { width:100%; border-collapse:collapse; min-width:1100px; font-size:13px; table-layout:auto; }
     .table-wrap.account-pool { width:100%; min-width:0; }
@@ -344,7 +344,73 @@ const uiCSS = `    :root { color-scheme: light; }
       .grok-inspection-page .pager { align-items:stretch; }
       .grok-inspection-page .pager > div { width:100%; }
       .grok-inspection-page .pager > div:last-child { justify-content:space-between; }
-      .grok-inspection-page .tabs {
+      .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
+    .page-head-main { min-width:0; }
+    .title-row { display:flex; align-items:center; gap:8px; min-width:0; }
+    .title-row h1 { margin:6px 0 0; font-size:22px; line-height:1.25; letter-spacing:0; }
+    .head-actions { display:flex; align-items:center; gap:8px; padding-top:24px; flex:0 0 auto; }
+    .lang-ctl { display:inline-flex; align-items:center; margin:0; }
+    .lang-ctl select {
+      height:34px; min-width:72px; padding:0 28px 0 10px; border:1px solid var(--input-border,#cbd5e1);
+      border-radius:7px; background:var(--surface,#fff); color:var(--text,#0f172a); font-size:13px;
+    }
+    .sr-only {
+      position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
+      clip:rect(0,0,0,0); white-space:nowrap; border:0;
+    }
+    .help-wrap { position:relative; flex:0 0 auto; }
+    .help-btn {
+      width:34px; height:34px; padding:0; border:1px solid transparent; border-radius:7px;
+      background:transparent; color:#596b82; font-size:15px; font-weight:700; line-height:1;
+      display:inline-grid; place-items:center;
+    }
+    .help-btn:hover { background:var(--surface-subtle,#f8fafc); border-color:var(--border,#e2e8f0); color:var(--text,#0f172a); }
+    .help-btn:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+    .help-popover {
+      position:absolute; z-index:50; top:40px; right:0; width:min(380px, calc(100vw - 32px));
+      padding:12px 14px; border:1px solid var(--border,#cdd6e1); border-radius:8px;
+      background:var(--surface,#fff); box-shadow:0 12px 32px rgba(15,23,42,.14);
+      color:var(--muted,#64748b); font-size:13px; line-height:1.5;
+    }
+    .help-popover[hidden] { display:none !important; }
+    .help-popover.open { display:block; }
+    .help-body p { margin:0; }
+    .help-body p + p { margin-top:8px; }
+    .help-body strong { color:var(--text,#0f172a); font-weight:700; }
+    .autoban-control {
+      margin:0 0 12px; border:1px solid var(--border,#e2e8f0); border-radius:8px;
+      background:var(--surface,#fff); box-shadow:0 1px 2px rgba(15,23,42,.04); overflow:hidden;
+    }
+    .autoban-bar {
+      min-height:58px; display:flex; align-items:center; justify-content:space-between; gap:16px;
+      padding:11px 12px; border-bottom:1px solid var(--border,#e2e8f0);
+    }
+    .autoban-heading { display:flex; align-items:center; gap:9px; min-width:0; }
+    .autoban-heading-mark {
+      width:34px; height:34px; display:grid; place-items:center; flex:0 0 auto;
+      border-radius:7px; color:#315aa6; background:#eef2ff; font-size:16px; font-weight:700;
+    }
+    .autoban-heading-copy { min-width:0; }
+    .autoban-heading-copy strong { display:block; font-size:15px; line-height:1.25; color:var(--text,#0f172a); }
+    .autoban-heading-copy small, #banEnabledHint {
+      display:block; margin-top:2px; color:var(--muted,#64748b); font-size:11px; line-height:1.35;
+      overflow-wrap:break-word; word-break:normal;
+    }
+    .autoban-switch-row { display:flex; align-items:center; gap:9px; flex:0 0 auto; }
+    .autoban-actions {
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      padding:10px 12px; flex-wrap:wrap;
+    }
+    .autoban-action-buttons { display:flex; align-items:center; flex-wrap:wrap; gap:7px; min-width:0; }
+    .autoban-pool-status, #banFilterHint.autoban-pool-status {
+      color:var(--muted,#64748b); font-size:12px; line-height:1.4; max-width:100%;
+      overflow-wrap:break-word; word-break:normal; white-space:normal;
+    }
+    .ban-unsynced-banner {
+      margin:0 0 8px; color:var(--warn,#b45309); font-size:12px; line-height:1.45;
+      overflow-wrap:break-word; word-break:normal;
+    }
+    .grok-inspection-page .tabs {
         width:100% !important; max-width:100% !important;
         display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px;
         box-sizing:border-box;
@@ -367,8 +433,8 @@ const uiCSS = `    :root { color-scheme: light; }
       }
     }
     .grok-inspection-page .tabs {
-      display:inline-flex; gap:6px; flex-wrap:wrap; margin:0 0 14px; padding:3px;
-      background:var(--surface,#fff); border:1px solid var(--border,#e2e8f0); border-radius:10px;
+      display:inline-flex; gap:4px; flex-wrap:wrap; margin:0 0 12px; padding:8px 8px 0;
+      background:var(--surface,#fff); border:1px solid var(--border,#e2e8f0); border-radius:8px;
       width:fit-content; max-width:100%; box-sizing:border-box;
     }
     .grok-inspection-page .tab,
@@ -376,28 +442,36 @@ const uiCSS = `    :root { color-scheme: light; }
       border:1px solid transparent !important;
       background:transparent !important;
       color:var(--muted,#64748b) !important;
-      padding:8px 12px !important;
-      border-radius:8px !important;
+      padding:8px 14px !important;
+      border-radius:7px 7px 0 0 !important;
       cursor:pointer;
       font:inherit;
-      font-weight:600 !important;
+      font-weight:680 !important;
       height:auto !important;
-      min-height:0 !important;
+      min-height:48px !important;
+      max-height:none !important;
       display:flex !important;
       flex-direction:column !important;
       align-items:flex-start !important;
+      justify-content:center !important;
       gap:1px;
-      flex:0 0 auto !important;
+      flex:0 1 auto !important;
       min-width:0 !important;
       width:auto !important;
-      max-width:none;
+      max-width:min(360px,100%);
       box-shadow:none !important;
       outline:none !important;
       -webkit-appearance:none;
       appearance:none;
     }
-    .grok-inspection-page .tab-title { font-size:13px; line-height:1.2; color:inherit !important; white-space:nowrap; }
-    .grok-inspection-page .tab-desc { font-size:11px; font-weight:500; opacity:.78; line-height:1.2; color:inherit !important; white-space:nowrap; }
+    .grok-inspection-page .tab-title {
+      font-size:13px; line-height:1.25; color:inherit !important;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+    }
+    .grok-inspection-page .tab-desc {
+      font-size:11px; font-weight:520; opacity:.9; line-height:1.25; color:inherit !important;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+    }
     .grok-inspection-page .tab.active,
     .grok-inspection-page .tab.active:hover,
     .grok-inspection-page .tab.active:focus,
@@ -408,13 +482,15 @@ const uiCSS = `    :root { color-scheme: light; }
     .grok-inspection-page button.tab.active:focus,
     .grok-inspection-page button.tab.active:focus-visible,
     .grok-inspection-page button.tab.active:active {
-      background:#2563eb !important;
-      color:#fff !important;
-      border-color:#2563eb !important;
-      box-shadow:0 1px 2px rgba(37,99,235,.25) !important;
+      background:#eef4ff !important;
+      color:#174aa7 !important;
+      border-color:#d7e4fb !important;
+      border-bottom-color:#eef4ff !important;
+      box-shadow:none !important;
     }
     .grok-inspection-page .tab.active .tab-title,
-    .grok-inspection-page .tab.active .tab-desc { color:#fff !important; opacity:1; }
+    .grok-inspection-page .tab.active .tab-desc { color:inherit !important; opacity:1; }
+    .grok-inspection-page .tab.active .tab-desc { color:#5474a8 !important; }
     .grok-inspection-page .tab:not(.active),
     .grok-inspection-page button.tab:not(.active) {
       background:transparent !important;
@@ -425,6 +501,11 @@ const uiCSS = `    :root { color-scheme: light; }
       background:var(--surface-subtle,#f1f5f9) !important;
       color:var(--text,#0f172a) !important;
       border-color:var(--border,#e2e8f0) !important;
+    }
+    .grok-inspection-page .tab:focus-visible,
+    .grok-inspection-page button.tab:focus-visible {
+      outline:2px solid #2563eb !important;
+      outline-offset:-2px !important;
     }
     .panel { display:none; }
     .panel.active { display:block; }
@@ -440,9 +521,9 @@ const uiCSS = `    :root { color-scheme: light; }
     .switch input:checked + .slider { background:#16a34a; }
     .switch input:checked + .slider:before { transform:translateX(20px); }
     .switch input:disabled + .slider { opacity:.55; cursor:not-allowed; }
-    .status-pill { display:inline-flex; align-items:center; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:700; }
-    .status-pill.on { background:#dcfce7; color:#166534; }
-    .status-pill.off { background:#fee2e2; color:#991b1b; }
+    .status-pill { display:inline-flex; align-items:center; min-height:25px; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:730; white-space:nowrap; }
+    .status-pill.on { background:#e8f6f1; color:#0f8a66; }
+    .status-pill.off { background:#f1f5f9; color:#64748b; }
     .autoban-split { display:grid; grid-template-columns:1fr; gap:12px; margin-bottom:12px; }
     .setting-card { background:var(--surface,#fff); border:1px solid var(--border,#e2e8f0); border-radius:10px; padding:14px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
     .setting-card h3 { margin:0 0 8px; font-size:15px; }
@@ -454,6 +535,71 @@ const uiCSS = `    :root { color-scheme: light; }
     .setting-row label { min-width:140px; }
     .note { margin-top:12px; padding:12px 14px; border-radius:10px; background:#eff6ff; border:1px solid #bfdbfe; color:#1e3a8a; font-size:13px; line-height:1.55; }
     html[data-grok-theme="dark"] .grok-inspection-page .tab:not(.active):hover, html[data-grok-theme="dark"] .grok-inspection-page button.tab:not(.active):hover { background:#1a2332 !important; color:#e5e7eb !important; border-color:#334155 !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active,
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active:hover,
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active:focus,
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active:focus-visible,
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active:active,
+    html[data-grok-theme="dark"] .grok-inspection-page button.tab.active,
+    html[data-grok-theme="dark"] .grok-inspection-page button.tab.active:hover,
+    html[data-grok-theme="dark"] .grok-inspection-page button.tab.active:focus,
+    html[data-grok-theme="dark"] .grok-inspection-page button.tab.active:focus-visible,
+    html[data-grok-theme="dark"] .grok-inspection-page button.tab.active:active {
+      background:#1a2c4c !important;
+      color:#c9ddff !important;
+      border-color:#30476a !important;
+      border-bottom-color:#1a2c4c !important;
+      box-shadow:inset 0 0 0 1px #30476a !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .tab.active .tab-desc { color:#9eb6dd !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .help-btn { color:#aeb9c9 !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .help-btn:hover {
+      background:#1c2632 !important; border-color:#334155 !important; color:#eef3f9 !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .help-popover {
+      background:var(--surface) !important; border-color:var(--border) !important;
+      color:var(--muted) !important; box-shadow:0 12px 32px rgba(0,0,0,.45);
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .help-body strong { color:var(--text) !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-control,
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-bar,
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-actions {
+      background:var(--surface) !important; border-color:var(--border) !important; color:var(--text) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-heading-mark {
+      color:#bcd4ff !important; background:#1a2c4c !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-heading-copy strong { color:var(--text) !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-heading-copy small,
+    html[data-grok-theme="dark"] .grok-inspection-page #banEnabledHint,
+    html[data-grok-theme="dark"] .grok-inspection-page .autoban-pool-status,
+    html[data-grok-theme="dark"] .grok-inspection-page #banFilterHint {
+      color:var(--muted) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .status-pill.on { background:#17362f !important; color:#5bd5ad !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .status-pill.off { background:#1d2737 !important; color:#aeb9c8 !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page th {
+      background:#111923 !important; color:#a9b7c9 !important; border-color:var(--border) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page td {
+      color:#bdc9d8 !important; border-color:var(--border-subtle) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .card {
+      background:var(--surface) !important; border-color:var(--border) !important; color:var(--text) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .card .k { color:var(--muted) !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .card .v { color:#f4f7fb !important; }
+    html[data-grok-theme="dark"] .grok-inspection-page .card.active {
+      outline-color:#4b83ee !important; border-color:#4b83ee !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .pager {
+      background:#131b25 !important; color:var(--muted) !important; border-color:var(--border) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .lang-ctl select {
+      background:var(--surface) !important; color:var(--text) !important; border-color:var(--input-border) !important;
+    }
+    html[data-grok-theme="dark"] .grok-inspection-page .ban-unsynced-banner { color:#efba62 !important; }
+
     html[data-grok-theme="dark"] .setting-card, html[data-grok-theme="dark"] .tabs { background:var(--surface) !important; border-color:var(--border) !important; }
     html[data-grok-theme="dark"] .note { background:#1e293b; border-color:#334155; color:#bfdbfe; }
     html[data-grok-theme="dark"] .stat-line { border-color:#2b3648; }
@@ -461,6 +607,14 @@ const uiCSS = `    :root { color-scheme: light; }
     html[data-grok-theme="dark"] .status-pill.on { background:#14532d; color:#bbf7d0; }
     html[data-grok-theme="dark"] .status-pill.off { background:#7f1d1d; color:#fecaca; }
     html[data-grok-theme="dark"] .slider { background:#475569; }
+
+    @media (min-width:761px) and (max-width:1220px) {
+      .grok-inspection-page .summary,
+      .grok-inspection-page .summary.ban-summary {
+        grid-template-columns:repeat(3,minmax(0,1fr)) !important;
+      }
+      .grok-inspection-page .card { min-height:82px; }
+    }
     @media (min-width:761px) and (max-width:960px) {
       .grok-inspection-page .tabs { width:fit-content; max-width:100%; }
       .grok-inspection-page .tab,
@@ -493,6 +647,76 @@ const uiCSS = `    :root { color-scheme: light; }
       }
       .grok-inspection-page .table-wrap.account-pool code {
         font:inherit !important; background:transparent !important; border:0 !important; padding:0 !important; color:inherit !important;
+      }
+    }
+
+    @media (max-width:760px) {
+      .grok-inspection-page .page-head { align-items:flex-start; gap:10px; }
+      .grok-inspection-page .title-row h1 { font-size:20px; }
+      .grok-inspection-page .head-actions { padding-top:22px; }
+      .grok-inspection-page .lang-ctl select { width:72px; min-width:72px; }
+      .grok-inspection-page .help-popover { right:auto; left:0; width:min(360px, calc(100vw - 24px)); }
+      .grok-inspection-page .tabs {
+        width:100% !important; max-width:100% !important;
+        display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px !important;
+        padding:8px !important; border-radius:7px !important;
+      }
+      .grok-inspection-page .tab,
+      .grok-inspection-page button.tab {
+        width:100% !important; max-width:none !important; min-width:0 !important;
+        min-height:44px !important; padding:8px !important; border-radius:7px !important;
+        align-items:flex-start !important;
+      }
+      .grok-inspection-page .tab-title,
+      .grok-inspection-page .tab-desc {
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      }
+      .grok-inspection-page .summary,
+      .grok-inspection-page .summary.ban-summary {
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:7px;
+      }
+      .grok-inspection-page .card {
+        min-width:0; min-height:82px; padding:10px; overflow:hidden;
+      }
+      .grok-inspection-page .card .k {
+        min-height:33px; font-size:11px; overflow-wrap:break-word; word-break:normal;
+      }
+      .grok-inspection-page .autoban-control { border-radius:7px; }
+      .grok-inspection-page .autoban-bar {
+        align-items:flex-start; flex-direction:column; gap:10px;
+      }
+      .grok-inspection-page .autoban-switch-row {
+        width:100%; justify-content:space-between;
+      }
+      .grok-inspection-page .autoban-actions {
+        align-items:flex-start; flex-direction:column;
+      }
+      .grok-inspection-page .autoban-action-buttons {
+        display:grid; grid-template-columns:1fr 1fr; width:100%; gap:7px;
+      }
+      .grok-inspection-page .autoban-action-buttons > button {
+        width:100%; min-width:0;
+      }
+      .grok-inspection-page .autoban-action-buttons > .danger,
+      .grok-inspection-page .autoban-action-buttons > #banUnbanAllBtn {
+        grid-column:1 / -1;
+      }
+      .grok-inspection-page .autoban-pool-status,
+      .grok-inspection-page #banFilterHint {
+        white-space:normal; width:100%;
+      }
+      .grok-inspection-page .table-wrap.account-pool {
+        width:100% !important; min-width:0 !important; border-radius:7px;
+      }
+      .grok-inspection-page .table-wrap.account-pool .table-scroll {
+        overflow-x:auto; -webkit-overflow-scrolling:touch; width:100%;
+      }
+      .grok-inspection-page .pager {
+        align-items:stretch; flex-direction:column;
+      }
+      .grok-inspection-page .pager > div { width:100%; }
+      .grok-inspection-page .pager > div:last-child {
+        display:flex; justify-content:space-between; gap:8px;
       }
     }
 `

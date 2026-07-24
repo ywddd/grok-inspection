@@ -13,17 +13,25 @@ const uiDocMid = `  </style>
 </head>
 <body>
   <div class="wrap grok-inspection-page">
-    <div class="hero">
-      <div>
+    <div class="page-head">
+      <div class="page-head-main">
         <div class="badge">xAI / Grok · CPA Plugin</div>
-        <h1 data-i18n="title">Grok 账号巡检</h1>
-        <p class="sub" id="heroSub" data-i18n="subtitle">「开始巡检」清空并重测全部；「增量巡检」只测新增账号；「抽检」按数量/比例随机抽测并保留其他结果；「巡检当前分类」只重测所选分类（需先点分类卡片）；「批量操作」只作用于当前筛选；结果会自动保存。</p>
+        <div class="title-row">
+          <h1 data-i18n="title">Grok 账号巡检</h1>
+          <div class="help-wrap">
+            <button type="button" class="help-btn" id="helpBtn" data-i18n-title="help_title" data-i18n-aria-label="help_title" title="巡检说明" aria-label="巡检说明" aria-expanded="false" aria-controls="helpPopover">?</button>
+            <div class="help-popover" id="helpPopover" role="dialog" aria-modal="false" hidden>
+              <div id="heroSub" class="help-body"></div>
+            </div>
+          </div>
+        </div>
       </div>
-      <div class="controls">
-        <label class="ctl"><span data-i18n="language">语言</span>
-          <select id="langSelect" style="height:26px;border:1px solid #cbd5e1;border-radius:6px;padding:0 4px;">
+      <div class="head-actions">
+        <label class="lang-ctl">
+          <span class="sr-only" data-i18n="language">语言</span>
+          <select id="langSelect" data-i18n-aria-label="language" aria-label="语言">
             <option value="zh">中文</option>
-            <option value="en">English</option>
+            <option value="en">EN</option>
           </select>
         </label>
       </div>
@@ -107,26 +115,33 @@ const uiDocMid = `  </style>
     </section>
 
     <section class="panel" id="panel-autoban">
-      <div class="module-bar">
-        <div>
-          <h2 data-i18n="ban_title">实时自动禁用</h2>
+      <div class="autoban-control">
+        <div class="autoban-bar">
+          <div class="autoban-heading">
+            <span class="autoban-heading-mark" aria-hidden="true">◎</span>
+            <div class="autoban-heading-copy">
+              <strong data-i18n="ban_title">实时自动禁用</strong>
+              <small id="banEnabledHint" data-i18n="ban_enabled_hint">开关会立即生效并保存</small>
+            </div>
+          </div>
+          <div class="autoban-switch-row switch-row">
+            <label class="switch" data-i18n-title="ban_enable" title="开启后实时拦截并禁用">
+              <input id="banEnabledToggle" type="checkbox">
+              <span class="slider"></span>
+            </label>
+            <span id="banEnabledPill" class="status-pill off" data-i18n="ban_off">已关闭</span>
+          </div>
         </div>
-        <div class="switch-row">
-          <label class="switch" data-i18n-title="ban_enable" title="开启后实时拦截并禁用">
-            <input id="banEnabledToggle" type="checkbox">
-            <span class="slider"></span>
-          </label>
-          <span id="banEnabledPill" class="status-pill off" data-i18n="ban_off">已关闭</span>
-          <span class="hint" id="banEnabledHint" class="hint" data-i18n="ban_enabled_hint">开关会立即生效并保存</span>
+        <div class="autoban-actions">
+          <div class="autoban-action-buttons">
+            <button id="banRefreshBtn" class="soft" type="button" data-i18n="ban_refresh">刷新状态</button>
+            <button id="banUnbanFilterBtn" class="soft" type="button" disabled data-i18n="ban_unban_filter">解禁当前分类</button>
+            <button id="banUnbanAllBtn" class="danger" type="button" data-i18n="ban_unban_all">全部解禁</button>
+          </div>
+          <span class="hint autoban-pool-status" id="banFilterHint" data-i18n="ban_filter_hint">点击下方卡片筛选分类</span>
         </div>
       </div>
-      <div class="controls" style="margin-bottom:12px">
-        <button id="banRefreshBtn" class="soft" type="button" data-i18n="ban_refresh">刷新状态</button>
-        <button id="banUnbanFilterBtn" class="soft" type="button" disabled data-i18n="ban_unban_filter">解禁当前分类</button>
-        <button id="banUnbanAllBtn" class="danger" type="button" data-i18n="ban_unban_all">全部解禁</button>
-        <span class="hint" id="banFilterHint" class="hint" data-i18n="ban_filter_hint">点击下方卡片筛选分类</span>
-      </div>
-      <div id="banUnsyncedBanner" class="hint" style="display:none;margin-bottom:8px;color:var(--warn,#b45309)"></div>
+      <div id="banUnsyncedBanner" class="hint ban-unsynced-banner" style="display:none"></div>
       <div id="banSummary" class="summary ban-summary">
         <div class="card active" data-ban-filter="all"><div class="k" data-i18n="ban_all">全部</div><div class="v" id="banCount">0</div></div>
         <div class="card" data-ban-filter="quota"><div class="k" data-i18n="ban_quota">额度用尽</div><div class="v" id="banQuotaCount">0</div></div>

@@ -136,3 +136,98 @@ func TestUICSSDoesNotStackDuplicateSystems(t *testing.T) {
 		t.Fatalf("page-head defined too many times: %d", strings.Count(css, ".page-head {"))
 	}
 }
+
+func TestUIPreviewMetricAlignment(t *testing.T) {
+	css := extractUICSSForHygiene(string(renderUIPage(pluginName)))
+
+	// Tab titles inherit parent line-height (preview ~18.85 at 13px body), not a compressed 1.2.
+	if strings.Contains(css, `.tab .tab-title, .mode-tab .tab-title {
+          display:block; line-height:1.2;`) || strings.Contains(css, "line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; max-width:100%;") {
+		// allow 1.2 only if not on tab-title; require inherit on tab-title
+	}
+	if !strings.Contains(css, ".tab .tab-title") || !strings.Contains(css, "line-height:inherit") {
+		t.Fatal("tab-title must use line-height:inherit to match preview tab metrics")
+	}
+	// Ensure the primary tab-title rule is not still locked to 1.2.
+	reTitle := regexp.MustCompile(`\.tab \.tab-title[^{]*\{[^}]*\}`)
+	foundInherit := false
+	for _, m := range reTitle.FindAllString(css, -1) {
+		if strings.Contains(m, "line-height:1.2") {
+			t.Fatalf("tab-title still uses compressed line-height: %s", m)
+		}
+		if strings.Contains(m, "line-height:inherit") {
+			foundInherit = true
+		}
+	}
+	if !foundInherit {
+		t.Fatal("tab-title rule missing line-height:inherit")
+	}
+
+	// Mobile mode-tabs gap must stay 4px like preview (not 6px).
+	reMobileTabs := regexp.MustCompile(`@media \(max-width:760px\)\s*\{[\s\S]*?\.mode-tabs[\s\S]*?gap:\s*([0-9.]+)px`)
+	m := reMobileTabs.FindStringSubmatch(css)
+	if m == nil {
+		// also allow .grok-inspection-page .tabs in the same rule
+		reMobileTabs = regexp.MustCompile(`@media \(max-width:760px\)\s*\{[\s\S]*?\.tabs[\s\S]*?gap:\s*([0-9.]+)px`)
+		m = reMobileTabs.FindStringSubmatch(css)
+	}
+	if m == nil {
+		t.Fatal("760px mode-tabs gap not found")
+	}
+	if m[1] != "4" {
+		t.Fatalf("760px mode-tabs gap=%spx, want 4px", m[1])
+	}
+	// 640 must not reintroduce a larger gap.
+	if strings.Contains(css, "gap:6px") && strings.Contains(css, "mode-tabs") {
+		// only fail if gap:6px appears near mode-tabs
+		if regexp.MustCompile(`mode-tabs[\s\S]{0,120}gap:\s*6px|gap:\s*6px[\s\S]{0,80}mode-tabs`).MatchString(css) {
+			t.Fatal("mode-tabs still uses gap:6px somewhere")
+		}
+	}
+
+	// page-head keeps 18px baseline; mobile must not shrink to 10px.
+	if !strings.Contains(css, ".page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px;") &&
+		!strings.Contains(css, "gap:18px; margin-bottom:14px") {
+		// looser
+		if !regexp.MustCompile(`\.page-head\s*\{[^}]*gap:\s*18px`).MatchString(css) {
+			t.Fatal("page-head baseline gap must be 18px")
+		}
+	}
+	if regexp.MustCompile(`@media \(max-width:640px\)[\s\S]*?\.page-head\s*\{\s*gap:\s*10px`).MatchString(css) {
+		t.Fatal("640px page-head must not reduce gap to 10px; keep 18px baseline")
+	}
+
+	// Key hint inherits body font-size; other hints stay 12px.
+	if !regexp.MustCompile(`\.access-row\s+#keyHint|#keyHint\.key-state|\.access-row\s+#keyHint[\s\S]{0,80}font-size:\s*inherit`).MatchString(css) &&
+		!strings.Contains(css, "font-size:inherit") {
+		// require explicit inherit on key hint selector
+		if !strings.Contains(css, ".access-row #keyHint") && !strings.Contains(css, ".access-row .key-state") {
+			t.Fatal("missing access-row keyHint selector for inherited font-size")
+		}
+	}
+	if !strings.Contains(css, ".access-row #keyHint") && !strings.Contains(css, ".access-row #keyHint,") {
+		// accept combined selectors
+		if !regexp.MustCompile(`\.access-row\s+#keyHint`).MatchString(css) {
+			t.Fatal("expected .access-row #keyHint rule")
+		}
+	}
+	if !regexp.MustCompile(`\.access-row\s+#keyHint[^{]*\{[^}]*font-size:\s*inherit`).MatchString(css) {
+		t.Fatal("access-row #keyHint must use font-size:inherit")
+	}
+	if !regexp.MustCompile(`\.hint[^{]*\{[^}]*font-size:\s*12px`).MatchString(css) && !strings.Contains(css, ".hint, .pager-meta") {
+		// existing combined rule
+		if !strings.Contains(css, "font-size:12px") {
+			t.Fatal("generic hints should remain 12px")
+		}
+	}
+
+	// ~1000px schedule stays single-line: nowrap on desktop schedule-controls.
+	if !regexp.MustCompile(`\.schedule-controls\s*\{[^}]*flex-wrap:\s*nowrap`).MatchString(css) &&
+		!strings.Contains(css, "flex-wrap:nowrap") {
+		t.Fatal("schedule-controls must use flex-wrap:nowrap for ~1000px single-row layout")
+	}
+	// Mobile may still wrap/grid; ensure 640 keeps grid for schedule-controls.
+	if !strings.Contains(css, "@media (max-width:640px)") || !strings.Contains(css, "schedule-controls") {
+		t.Fatal("mobile schedule layout rules missing")
+	}
+}

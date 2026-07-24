@@ -86,6 +86,9 @@ const uiCSS = `
           font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:#3e5068;
         }
         .key-state, #keyHint { display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-weight:650; min-width:0; }
+        .access-row #keyHint, .access-row #keyHint.key-state, .access-row .key-state {
+          font-size:inherit; line-height:inherit;
+        }
         #keyHint.ok, .key-state.ok { color:var(--green); }
 
         .mode-tabs, .grok-inspection-page .tabs {
@@ -99,7 +102,7 @@ const uiCSS = `
         }
         .tab > span, .mode-tab > span { min-width:0; flex:1 1 auto; overflow:hidden; }
         .tab .tab-title, .mode-tab .tab-title {
-          display:block; line-height:1.2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; max-width:100%;
+          display:block; line-height:inherit; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; max-width:100%;
         }
         .tab .tab-desc, .mode-tab .tab-desc, .tab small, .mode-tab small {
           display:block; margin-top:1px; color:var(--muted-2); font-size:11px; font-weight:520;
@@ -115,8 +118,24 @@ const uiCSS = `
           display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; padding:12px;
           border-top:1px solid var(--line); min-width:0;
         }
-        .toolbar-main, .toolbar-actions, .sampling-controls, .schedule-controls, .bulk-actions, .result-tools, .autoban-action-buttons {
+        .toolbar-main, .toolbar-actions, .sampling-controls, .bulk-actions, .result-tools, .autoban-action-buttons {
           display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0;
+        }
+        .schedule-controls {
+          display:flex; align-items:center; flex-wrap:nowrap; gap:6px; min-width:0; overflow:hidden;
+        }
+        .schedule-controls .field, .schedule-controls .check-control {
+          flex:0 1 auto; min-width:0; padding:0 8px; gap:6px;
+        }
+        .schedule-controls .field label, .schedule-controls .check-control span {
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:9.5em;
+        }
+        .schedule-controls .field.wide label { max-width:4.5em; }
+        .schedule-controls .field input { width:36px; }
+        .schedule-controls .field select { max-width:5.5em; }
+        .schedule-row > .btn, .schedule-row #scheduleSaveBtn { flex:0 0 auto; white-space:nowrap; }
+        .schedule-status, #scheduleStatus {
+          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:12em;
         }
         .field, .check-control {
           min-height:34px; display:inline-flex; align-items:center; gap:8px; padding:0 10px;
@@ -148,11 +167,12 @@ const uiCSS = `
           display:inline-flex; align-items:center; gap:7px; color:#42536a; font-size:12px; font-weight:720; white-space:nowrap;
         }
         .schedule-row {
-          display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px;
+          display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px;
           padding:10px 12px; border-top:1px solid var(--line); min-width:0;
         }
         .schedule-status, #scheduleStatus {
-          display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; font-weight:650; min-width:0;
+          display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; font-weight:650;
+          min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:11em;
         }
         .status-dot { width:7px; height:7px; border-radius:50%; background:#a9b3c2; flex:0 0 auto; }
 
@@ -349,18 +369,30 @@ const uiCSS = `
           .toolbar { grid-template-columns:1fr; }
           .toolbar-actions { justify-content:flex-start; }
         }
+        @media (max-width:1180px) and (min-width:901px) {
+          .schedule-row { gap:6px; }
+          .schedule-controls { gap:4px; }
+          .schedule-controls .field, .schedule-controls .check-control { padding:0 6px; gap:4px; }
+          .schedule-controls .field label, .schedule-controls .check-control span { max-width:7.5em; }
+          .schedule-controls .field.wide label { max-width:3.5em; }
+          .schedule-status, #scheduleStatus { max-width:9em; }
+        }
         @media (max-width:900px) {
           .grok-inspection-page { width:min(100% - 24px, 1480px); padding-top:12px; }
           .summary, .overview.inspection-summary { grid-template-columns:repeat(3, minmax(0, 1fr)); }
           .summary.ban-summary, .overview.autoban-summary, .autoban-summary { grid-template-columns:repeat(3, minmax(0, 1fr)); }
-          .schedule-row { grid-template-columns:1fr auto; }
-          .schedule-controls { grid-column:1 / -1; }
+          .schedule-row { grid-template-columns:1fr auto; gap:8px; }
+          .schedule-controls {
+            grid-column:1 / -1; flex-wrap:wrap; overflow:visible; gap:6px;
+          }
+          .schedule-controls .field label, .schedule-controls .check-control span { max-width:none; }
+          .schedule-status, #scheduleStatus { max-width:none; }
         }
         @media (max-width:760px) {
           body { overflow-x:hidden !important; }
           .grok-inspection-page { width:100%; max-width:100%; padding:10px 10px 28px; }
           .mode-tabs, .grok-inspection-page .tabs {
-            display:grid !important; grid-template-columns:1fr 1fr !important; width:100%; max-width:100%; gap:6px; padding:8px;
+            display:grid !important; grid-template-columns:1fr 1fr !important; width:100%; max-width:100%; gap:4px; padding:8px;
           }
           .tab, .mode-tab, button.tab, button.mode-tab { width:100%; min-width:0; max-width:100%; padding:8px; align-items:flex-start; }
           .tab > span, .mode-tab > span { min-width:0; overflow:hidden; }
@@ -378,7 +410,6 @@ const uiCSS = `
         @media (max-width:640px) {
           body { font-size:13px; overflow-x:hidden !important; }
           .grok-inspection-page { width:100%; max-width:100%; padding:10px 10px 28px; }
-          .page-head { gap:10px; }
           h1 { font-size:20px; }
           .head-actions { padding-top:22px; }
           .lang-ctl .select-compact, .lang-ctl select { width:72px; min-width:72px; }
@@ -387,7 +418,7 @@ const uiCSS = `
           .access-row { flex-direction:column; align-items:flex-start; gap:6px; }
           #managementKey, .access-value { width:100%; min-width:0; }
           .mode-tabs, .grok-inspection-page .tabs {
-            display:grid !important; grid-template-columns:1fr 1fr !important; width:100%; max-width:100%; padding:8px 8px 0;
+            display:grid !important; grid-template-columns:1fr 1fr !important; width:100%; max-width:100%; gap:4px; padding:8px 8px 0;
           }
           .tab, .mode-tab { width:100%; min-width:0; max-width:100%; padding:8px; align-items:flex-start; }
           .tab > span, .mode-tab > span { min-width:0; overflow:hidden; }
@@ -404,7 +435,7 @@ const uiCSS = `
           .sampling-controls .field { width:100%; min-width:0; }
           .sampling-controls .btn, .sampling-controls #sampleBtn { grid-column:1 / -1; width:100%; }
           .schedule-row { display:grid; grid-template-columns:1fr auto; padding:10px; }
-          .schedule-controls { grid-column:1 / -1; display:grid; grid-template-columns:1fr 1fr; }
+          .schedule-controls { grid-column:1 / -1; display:grid; grid-template-columns:1fr 1fr; flex-wrap:wrap; overflow:visible; }
           .schedule-controls .field, .schedule-controls .check-control { min-width:0; width:100%; }
           .schedule-controls .wide { grid-column:1 / -1; }
           .summary, .overview.inspection-summary, .summary.ban-summary, .overview.autoban-summary, .autoban-summary {

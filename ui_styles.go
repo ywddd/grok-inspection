@@ -294,7 +294,7 @@ const uiCSS = `    :root { color-scheme: light; }
         --input-border: #475569;
       }
     }
-    
+
       .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
       .page-head-main { min-width:0; }
       .title-row { display:flex; align-items:center; gap:8px; min-width:0; }

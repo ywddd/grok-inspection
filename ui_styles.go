@@ -294,62 +294,13 @@ const uiCSS = `    :root { color-scheme: light; }
         --input-border: #475569;
       }
     }
-    @media (max-width:760px){
-      body { overflow-x:hidden !important; }
-      .grok-inspection-page { padding:14px 12px calc(24px + env(safe-area-inset-bottom)); }
-      .grok-inspection-page .hero { display:block; }
-      .grok-inspection-page h1 { font-size:24px; line-height:30px; }
-      .grok-inspection-page .controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; }
-      .grok-inspection-page .key-row { grid-column:1 / -1; grid-row:1; width:100%; }
-      .grok-inspection-page .key-row input { width:100%; min-width:0; height:42px; font-size:16px; }
-      .grok-inspection-page .controls > label { width:100%; min-width:0; padding:0 8px; }
-      .grok-inspection-page .controls > label:first-of-type { grid-column:1 / -1; grid-row:2; }
-      .grok-inspection-page .controls > label:nth-of-type(2) { grid-column:1; grid-row:3; }
-      .grok-inspection-page .controls > label:nth-of-type(3) { grid-column:2; grid-row:3; }
-      .grok-inspection-page input[type=number] { flex:1; width:100%; min-width:0; }
-      .grok-inspection-page .controls > #stopBtn { grid-column:1; grid-row:4; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .controls > #runBtn { grid-column:2; grid-row:4; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .controls > #incrBtn { grid-column:1 / -1; grid-row:5; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .controls > #applyBtn { grid-column:1 / -1; grid-row:6; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .controls > #filterRunBtn { grid-column:1 / -1; grid-row:7; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .sample-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; margin-top:8px; }
-      .grok-inspection-page .sample-controls > label { width:100%; min-width:0; padding:0 8px; }
-      .grok-inspection-page .sample-controls > #sampleBtn { grid-column:1 / -1; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
-      .grok-inspection-page .summary,
-      .grok-inspection-page .summary.ban-summary {
-        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
-        gap:8px; width:100%; min-width:0;
-      }
-      .grok-inspection-page .card {
-        min-width:0; min-height:74px; padding:10px 12px; overflow:hidden;
-        display:flex; flex-direction:column; justify-content:center; box-sizing:border-box;
-      }
-      .grok-inspection-page .card .k { font-size:11px; line-height:1.25; }
-      .grok-inspection-page .card .v { font-size:22px; margin-top:4px; line-height:1.15; }
-      .grok-inspection-page .bar { display:block; }
-      .grok-inspection-page .actions-row {
-        display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
-        margin-top:8px; width:100%; gap:8px;
-      }
-      .grok-inspection-page .actions-row > button { width:100%; min-width:0; padding:0 8px; }
-      .grok-inspection-page .actions-row .hint {
-        grid-column:1 / -1; line-height:1.5; overflow-wrap:anywhere;
-      }
-      .grok-inspection-page .schedule-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-      .grok-inspection-page .schedule-row > label,
-      .grok-inspection-page .schedule-row > button { width:100%; min-width:0; }
-      .grok-inspection-page .schedule-row .schedule-status {
-        grid-column:1 / -1; margin-left:0; text-align:left; overflow-wrap:anywhere;
-      }
-      .grok-inspection-page .pager { align-items:stretch; }
-      .grok-inspection-page .pager > div { width:100%; }
-      .grok-inspection-page .pager > div:last-child { justify-content:space-between; }
+    
       .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
-    .page-head-main { min-width:0; }
-    .title-row { display:flex; align-items:center; gap:8px; min-width:0; }
-    .title-row h1 { margin:6px 0 0; font-size:22px; line-height:1.25; letter-spacing:0; }
-    .head-actions { display:flex; align-items:center; gap:8px; padding-top:24px; flex:0 0 auto; }
-    .lang-ctl { display:inline-flex; align-items:center; margin:0; }
+      .page-head-main { min-width:0; }
+      .title-row { display:flex; align-items:center; gap:8px; min-width:0; }
+      .title-row h1 { margin:6px 0 0; font-size:22px; line-height:1.25; letter-spacing:0; }
+      .head-actions { display:flex; align-items:center; gap:8px; padding-top:24px; flex:0 0 auto; }
+      .lang-ctl { display:inline-flex; align-items:center; margin:0; }
     .lang-ctl select {
       height:34px; min-width:72px; padding:0 28px 0 10px; border:1px solid var(--input-border,#cbd5e1);
       border-radius:7px; background:var(--surface,#fff); color:var(--text,#0f172a); font-size:13px;
@@ -358,25 +309,25 @@ const uiCSS = `    :root { color-scheme: light; }
       position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden;
       clip:rect(0,0,0,0); white-space:nowrap; border:0;
     }
-    .help-wrap { position:relative; flex:0 0 auto; }
+      .help-wrap { position:relative; flex:0 0 auto; }
     .help-btn {
       width:34px; height:34px; padding:0; border:1px solid transparent; border-radius:7px;
       background:transparent; color:#596b82; font-size:15px; font-weight:700; line-height:1;
       display:inline-grid; place-items:center;
     }
-    .help-btn:hover { background:var(--surface-subtle,#f8fafc); border-color:var(--border,#e2e8f0); color:var(--text,#0f172a); }
-    .help-btn:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
+      .help-btn:hover { background:var(--surface-subtle,#f8fafc); border-color:var(--border,#e2e8f0); color:var(--text,#0f172a); }
+      .help-btn:focus-visible { outline:2px solid #2563eb; outline-offset:2px; }
     .help-popover {
       position:absolute; z-index:50; top:40px; right:0; width:min(380px, calc(100vw - 32px));
       padding:12px 14px; border:1px solid var(--border,#cdd6e1); border-radius:8px;
       background:var(--surface,#fff); box-shadow:0 12px 32px rgba(15,23,42,.14);
       color:var(--muted,#64748b); font-size:13px; line-height:1.5;
     }
-    .help-popover[hidden] { display:none !important; }
-    .help-popover.open { display:block; }
-    .help-body p { margin:0; }
-    .help-body p + p { margin-top:8px; }
-    .help-body strong { color:var(--text,#0f172a); font-weight:700; }
+      .help-popover[hidden] { display:none !important; }
+      .help-popover.open { display:block; }
+      .help-body p { margin:0; }
+      .help-body p + p { margin-top:8px; }
+      .help-body strong { color:var(--text,#0f172a); font-weight:700; }
     .autoban-control {
       margin:0 0 12px; border:1px solid var(--border,#e2e8f0); border-radius:8px;
       background:var(--surface,#fff); box-shadow:0 1px 2px rgba(15,23,42,.04); overflow:hidden;
@@ -385,23 +336,23 @@ const uiCSS = `    :root { color-scheme: light; }
       min-height:58px; display:flex; align-items:center; justify-content:space-between; gap:16px;
       padding:11px 12px; border-bottom:1px solid var(--border,#e2e8f0);
     }
-    .autoban-heading { display:flex; align-items:center; gap:9px; min-width:0; }
+      .autoban-heading { display:flex; align-items:center; gap:9px; min-width:0; }
     .autoban-heading-mark {
       width:34px; height:34px; display:grid; place-items:center; flex:0 0 auto;
       border-radius:7px; color:#315aa6; background:#eef2ff; font-size:16px; font-weight:700;
     }
-    .autoban-heading-copy { min-width:0; }
-    .autoban-heading-copy strong { display:block; font-size:15px; line-height:1.25; color:var(--text,#0f172a); }
+      .autoban-heading-copy { min-width:0; }
+      .autoban-heading-copy strong { display:block; font-size:15px; line-height:1.25; color:var(--text,#0f172a); }
     .autoban-heading-copy small, #banEnabledHint {
       display:block; margin-top:2px; color:var(--muted,#64748b); font-size:11px; line-height:1.35;
       overflow-wrap:break-word; word-break:normal;
     }
-    .autoban-switch-row { display:flex; align-items:center; gap:9px; flex:0 0 auto; }
+      .autoban-switch-row { display:flex; align-items:center; gap:9px; flex:0 0 auto; }
     .autoban-actions {
       display:flex; align-items:center; justify-content:space-between; gap:12px;
       padding:10px 12px; flex-wrap:wrap;
     }
-    .autoban-action-buttons { display:flex; align-items:center; flex-wrap:wrap; gap:7px; min-width:0; }
+      .autoban-action-buttons { display:flex; align-items:center; flex-wrap:wrap; gap:7px; min-width:0; }
     .autoban-pool-status, #banFilterHint.autoban-pool-status {
       color:var(--muted,#64748b); font-size:12px; line-height:1.4; max-width:100%;
       overflow-wrap:break-word; word-break:normal; white-space:normal;
@@ -410,28 +361,7 @@ const uiCSS = `    :root { color-scheme: light; }
       margin:0 0 8px; color:var(--warn,#b45309); font-size:12px; line-height:1.45;
       overflow-wrap:break-word; word-break:normal;
     }
-    .grok-inspection-page .tabs {
-        width:100% !important; max-width:100% !important;
-        display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px;
-        box-sizing:border-box;
-      }
-      .grok-inspection-page .tab,
-      .grok-inspection-page button.tab {
-        flex:none !important; width:100% !important; min-width:0 !important;
-        max-width:none !important; align-items:flex-start !important;
-        box-sizing:border-box;
-      }
-      .grok-inspection-page .table-wrap.account-pool table,
-      .grok-inspection-page .table-wrap.account-pool table.inspect-table,
-      .grok-inspection-page .table-wrap.account-pool table.ban-table {
-        min-width:720px !important;
-      }
-      .grok-inspection-page .table-wrap.account-pool { border-radius:10px; width:100%; }
-      .grok-inspection-page .table-wrap.account-pool .empty { min-height:120px; }
-      .grok-inspection-page .table-wrap.account-pool code {
-        font:inherit; background:transparent; border:0; padding:0; color:inherit;
-      }
-    }
+
     .grok-inspection-page .tabs {
       display:inline-flex; gap:4px; flex-wrap:wrap; margin:0 0 12px; padding:8px 8px 0;
       background:var(--surface,#fff); border:1px solid var(--border,#e2e8f0); border-radius:8px;
@@ -622,56 +552,29 @@ const uiCSS = `    :root { color-scheme: light; }
       .autoban-split, .settings-grid { grid-template-columns:1fr; }
     }
     /* 手机端最终覆盖：保证 tabs 铺满，且两个账号池同宽 */
-    @media (max-width:760px) {
-      .grok-inspection-page .tabs {
-        width:100% !important; max-width:100% !important;
-        display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px !important;
-        box-sizing:border-box !important;
-      }
-      .grok-inspection-page .tab,
-      .grok-inspection-page button.tab {
-        flex:none !important; width:100% !important; min-width:0 !important;
-        max-width:none !important; box-sizing:border-box !important;
-      }
-      .grok-inspection-page .table-wrap.account-pool {
-        width:100% !important; min-width:0 !important;
-      }
-      .grok-inspection-page .table-wrap.account-pool table,
-      .grok-inspection-page .table-wrap.account-pool table.inspect-table,
-      .grok-inspection-page .table-wrap.account-pool table.ban-table {
-        min-width:720px !important;
-      }
-      .grok-inspection-page .table-wrap.account-pool table.ban-table td.col-name,
-      .grok-inspection-page .table-wrap.account-pool table.inspect-table td.col-name {
-        word-break:break-all; overflow-wrap:anywhere;
-      }
-      .grok-inspection-page .table-wrap.account-pool code {
-        font:inherit !important; background:transparent !important; border:0 !important; padding:0 !important; color:inherit !important;
-      }
-    }
 
     @media (max-width:760px) {
-      .grok-inspection-page .page-head { align-items:flex-start; gap:10px; }
-      .grok-inspection-page .title-row h1 { font-size:20px; }
-      .grok-inspection-page .head-actions { padding-top:22px; }
-      .grok-inspection-page .lang-ctl select { width:72px; min-width:72px; }
-      .grok-inspection-page .help-popover { right:auto; left:0; width:min(360px, calc(100vw - 24px)); }
-      .grok-inspection-page .tabs {
-        width:100% !important; max-width:100% !important;
-        display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px !important;
-        padding:8px !important; border-radius:7px !important;
-      }
-      .grok-inspection-page .tab,
-      .grok-inspection-page button.tab {
-        width:100% !important; max-width:none !important; min-width:0 !important;
-        min-height:44px !important; padding:8px !important; border-radius:7px !important;
-        align-items:flex-start !important;
-      }
-      .grok-inspection-page .tab-title,
-      .grok-inspection-page .tab-desc {
-        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-      }
-      .grok-inspection-page .summary,
+        body { overflow-x:hidden !important; }
+        .grok-inspection-page { padding:14px 12px calc(24px + env(safe-area-inset-bottom)); }
+        .grok-inspection-page .hero { display:block; }
+        .grok-inspection-page h1 { font-size:24px; line-height:30px; }
+        .grok-inspection-page .controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; }
+        .grok-inspection-page .key-row { grid-column:1 / -1; grid-row:1; width:100%; }
+        .grok-inspection-page .key-row input { width:100%; min-width:0; height:42px; font-size:16px; }
+        .grok-inspection-page .controls > label { width:100%; min-width:0; padding:0 8px; }
+        .grok-inspection-page .controls > label:first-of-type { grid-column:1 / -1; grid-row:2; }
+        .grok-inspection-page .controls > label:nth-of-type(2) { grid-column:1; grid-row:3; }
+        .grok-inspection-page .controls > label:nth-of-type(3) { grid-column:2; grid-row:3; }
+        .grok-inspection-page input[type=number] { flex:1; width:100%; min-width:0; }
+        .grok-inspection-page .controls > #stopBtn { grid-column:1; grid-row:4; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .controls > #runBtn { grid-column:2; grid-row:4; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .controls > #incrBtn { grid-column:1 / -1; grid-row:5; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .controls > #applyBtn { grid-column:1 / -1; grid-row:6; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .controls > #filterRunBtn { grid-column:1 / -1; grid-row:7; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .sample-controls { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; width:100%; margin-top:8px; }
+        .grok-inspection-page .sample-controls > label { width:100%; min-width:0; padding:0 8px; }
+        .grok-inspection-page .sample-controls > #sampleBtn { grid-column:1 / -1; width:100%; min-width:0; padding:0 8px; white-space:nowrap; }
+        .grok-inspection-page .summary,
       .grok-inspection-page .summary.ban-summary {
         grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:7px;
       }
@@ -681,7 +584,66 @@ const uiCSS = `    :root { color-scheme: light; }
       .grok-inspection-page .card .k {
         min-height:33px; font-size:11px; overflow-wrap:break-word; word-break:normal;
       }
-      .grok-inspection-page .autoban-control { border-radius:7px; }
+        .grok-inspection-page .card .v { font-size:22px; margin-top:4px; line-height:1.15; }
+        .grok-inspection-page .bar { display:block; }
+      .grok-inspection-page .actions-row {
+        display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+        margin-top:8px; width:100%; gap:8px;
+      }
+        .grok-inspection-page .actions-row > button { width:100%; min-width:0; padding:0 8px; }
+      .grok-inspection-page .actions-row .hint {
+        grid-column:1 / -1; line-height:1.5; overflow-wrap:anywhere;
+      }
+        .grok-inspection-page .schedule-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+        .grok-inspection-page .schedule-row > label,
+        .grok-inspection-page .schedule-row > button { width:100%; min-width:0; }
+      .grok-inspection-page .schedule-row .schedule-status {
+        grid-column:1 / -1; margin-left:0; text-align:left; overflow-wrap:anywhere;
+      }
+      .grok-inspection-page .pager {
+        align-items:stretch; flex-direction:column;
+      }
+        .grok-inspection-page .pager > div { width:100%; }
+      .grok-inspection-page .pager > div:last-child {
+        display:flex; justify-content:space-between; gap:8px;
+      }
+      .grok-inspection-page .tabs {
+        width:100% !important; max-width:100% !important;
+        display:grid !important; grid-template-columns:1fr 1fr !important; gap:6px !important;
+        padding:8px !important; border-radius:7px !important;
+      }
+        .grok-inspection-page .tab,
+      .grok-inspection-page button.tab {
+        width:100% !important; max-width:none !important; min-width:0 !important;
+        min-height:44px !important; padding:8px !important; border-radius:7px !important;
+        align-items:flex-start !important;
+      }
+        .grok-inspection-page .table-wrap.account-pool table,
+        .grok-inspection-page .table-wrap.account-pool table.inspect-table,
+      .grok-inspection-page .table-wrap.account-pool table.ban-table {
+        min-width:720px !important;
+      }
+      .grok-inspection-page .table-wrap.account-pool {
+        width:100% !important; min-width:0 !important; border-radius:7px;
+      }
+        .grok-inspection-page .table-wrap.account-pool .empty { min-height:120px; }
+      .grok-inspection-page .table-wrap.account-pool code {
+        font:inherit !important; background:transparent !important; border:0 !important; padding:0 !important; color:inherit !important;
+      }
+        .grok-inspection-page .table-wrap.account-pool table.ban-table td.col-name,
+      .grok-inspection-page .table-wrap.account-pool table.inspect-table td.col-name {
+        word-break:break-all; overflow-wrap:anywhere;
+      }
+        .grok-inspection-page .page-head { align-items:flex-start; gap:10px; }
+        .grok-inspection-page .title-row h1 { font-size:20px; }
+        .grok-inspection-page .head-actions { padding-top:22px; }
+        .grok-inspection-page .lang-ctl select { width:72px; min-width:72px; }
+        .grok-inspection-page .help-popover { right:auto; left:0; width:min(360px, calc(100vw - 24px)); }
+        .grok-inspection-page .tab-title,
+      .grok-inspection-page .tab-desc {
+        white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+      }
+        .grok-inspection-page .autoban-control { border-radius:7px; }
       .grok-inspection-page .autoban-bar {
         align-items:flex-start; flex-direction:column; gap:10px;
       }
@@ -697,26 +659,16 @@ const uiCSS = `    :root { color-scheme: light; }
       .grok-inspection-page .autoban-action-buttons > button {
         width:100%; min-width:0;
       }
-      .grok-inspection-page .autoban-action-buttons > .danger,
+        .grok-inspection-page .autoban-action-buttons > .danger,
       .grok-inspection-page .autoban-action-buttons > #banUnbanAllBtn {
         grid-column:1 / -1;
       }
-      .grok-inspection-page .autoban-pool-status,
+        .grok-inspection-page .autoban-pool-status,
       .grok-inspection-page #banFilterHint {
         white-space:normal; width:100%;
       }
-      .grok-inspection-page .table-wrap.account-pool {
-        width:100% !important; min-width:0 !important; border-radius:7px;
-      }
       .grok-inspection-page .table-wrap.account-pool .table-scroll {
         overflow-x:auto; -webkit-overflow-scrolling:touch; width:100%;
-      }
-      .grok-inspection-page .pager {
-        align-items:stretch; flex-direction:column;
-      }
-      .grok-inspection-page .pager > div { width:100%; }
-      .grok-inspection-page .pager > div:last-child {
-        display:flex; justify-content:space-between; gap:8px;
       }
     }
 `

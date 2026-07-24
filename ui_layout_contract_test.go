@@ -104,6 +104,27 @@ func TestUILayoutBilingualContract(t *testing.T) {
 		t.Fatal("tablet/medium ban summary should fall back to 3 columns")
 	}
 
+	// Desktop/base layout selectors must live outside the mobile media block.
+	assertCSSSelectorsOutsideMobile(t, page, []string{
+		".page-head {",
+		".page-head-main {",
+		".title-row {",
+		".head-actions {",
+		".lang-ctl {",
+		".help-wrap {",
+		".help-btn {",
+		".help-popover {",
+		".autoban-control {",
+		".autoban-bar {",
+		".autoban-actions {",
+		".summary.ban-summary { grid-template-columns:repeat(6,minmax(0,1fr))",
+		".grok-inspection-page .tabs {",
+		`html[data-grok-theme="dark"] .grok-inspection-page .tab.active`,
+	})
+	if n := countCSSMedia(page, "max-width:760px"); n != 1 {
+		t.Fatalf("want exactly 1 max-width:760px media block, got %d", n)
+	}
+
 	zh := extractI18NPack(page, "zh")
 	en := extractI18NPack(page, "en")
 	for _, key := range []string{
@@ -128,4 +149,170 @@ func TestUILayoutBilingualContract(t *testing.T) {
 	if zh["title"] == en["title"] {
 		t.Fatal("zh/en page titles should differ")
 	}
+}
+
+// cssOutsideMobile returns the UI CSS with all max-width:760px media blocks removed.
+func cssOutsideMobile(page string) string {
+	css := extractUICSS(page)
+	var b strings.Builder
+	i := 0
+	for i < len(css) {
+		idx := strings.Index(css[i:], "@media")
+		if idx < 0 {
+			b.WriteString(css[i:])
+			break
+		}
+		idx += i
+		b.WriteString(css[i:idx])
+		// find opening brace of this media query
+		j := idx + len("@media")
+		for j < len(css) && css[j] != '{' {
+			j++
+		}
+		if j >= len(css) {
+			b.WriteString(css[idx:])
+			break
+		}
+		header := css[idx:j]
+		// brace-match media body
+		depth := 0
+		k := j
+		for k < len(css) {
+			switch css[k] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					k++
+					goto doneMedia
+				}
+			}
+			k++
+		}
+	doneMedia:
+		if strings.Contains(header, "max-width:760px") {
+			// drop mobile media block
+			i = k
+			continue
+		}
+		b.WriteString(css[idx:k])
+		i = k
+	}
+	return b.String()
+}
+
+func extractUICSS(page string) string {
+	// Prefer the embedded style block from the rendered page.
+	start := strings.Index(page, "<style>")
+	end := strings.Index(page, "</style>")
+	if start >= 0 && end > start {
+		return page[start+len("<style>") : end]
+	}
+	return uiCSS
+}
+
+func countCSSMedia(page, needle string) int {
+	css := extractUICSS(page)
+	count := 0
+	i := 0
+	for i < len(css) {
+		idx := strings.Index(css[i:], "@media")
+		if idx < 0 {
+			break
+		}
+		idx += i
+		j := idx + len("@media")
+		for j < len(css) && css[j] != '{' {
+			j++
+		}
+		if j >= len(css) {
+			break
+		}
+		header := css[idx:j]
+		depth := 0
+		k := j
+		for k < len(css) {
+			switch css[k] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					k++
+					goto done
+				}
+			}
+			k++
+		}
+	done:
+		if strings.Contains(header, needle) {
+			count++
+		}
+		i = k
+	}
+	return count
+}
+
+func assertCSSSelectorsOutsideMobile(t *testing.T, page string, selectors []string) {
+	t.Helper()
+	outside := cssOutsideMobile(page)
+	css := extractUICSS(page)
+	for _, sel := range selectors {
+		if !strings.Contains(css, sel) {
+			t.Fatalf("CSS missing selector/snippet %q", sel)
+		}
+		if !strings.Contains(outside, sel) {
+			t.Fatalf("desktop/base CSS selector %q must not live only inside max-width:760px media", sel)
+		}
+		// First occurrence must also be outside mobile: compare positions in full CSS
+		// by ensuring the first match index is not inside a mobile media span.
+		first := strings.Index(css, sel)
+		if first < 0 {
+			t.Fatalf("CSS missing selector/snippet %q", sel)
+		}
+		if cssIndexInsideMobileMedia(css, first) {
+			t.Fatalf("first occurrence of %q is inside max-width:760px media; desktop would miss it", sel)
+		}
+	}
+}
+
+func cssIndexInsideMobileMedia(css string, pos int) bool {
+	i := 0
+	for i < len(css) {
+		idx := strings.Index(css[i:], "@media")
+		if idx < 0 {
+			return false
+		}
+		idx += i
+		j := idx + len("@media")
+		for j < len(css) && css[j] != '{' {
+			j++
+		}
+		if j >= len(css) {
+			return false
+		}
+		header := css[idx:j]
+		depth := 0
+		k := j
+		for k < len(css) {
+			switch css[k] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					k++
+					goto done
+				}
+			}
+			k++
+		}
+	done:
+		if strings.Contains(header, "max-width:760px") && pos >= idx && pos < k {
+			return true
+		}
+		i = k
+	}
+	return false
 }

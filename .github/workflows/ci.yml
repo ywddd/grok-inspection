@@ -77,3 +77,42 @@ jobs:
           path: dist/grok-inspection.${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 30
+
+  freebsd-build:
+    name: Test & Build (freebsd/amd64)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          sync: rsync
+          prepare: |
+            pkg install -y go122 || pkg install -y go
+          run: |
+            set -eu
+            GO="$(command -v go122 || command -v go)"
+            "$GO" version
+            "$GO" test ./... -count=1
+            mkdir -p dist
+            "$GO" build \
+              -buildvcs=false \
+              -buildmode=c-shared \
+              -o "dist/grok-inspection.so" \
+              .
+            "$GO" version -m "dist/grok-inspection.so" | tee build-info.txt
+            grep -q "GOOS=freebsd" build-info.txt
+            grep -q "GOARCH=amd64" build-info.txt
+
+      - name: Upload plugin artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: grok-inspection-freebsd-amd64
+          path: dist/grok-inspection.so
+          if-no-files-found: error
+          retention-days: 30

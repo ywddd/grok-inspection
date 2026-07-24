@@ -40,6 +40,7 @@ Download the package for your CPA platform from [Releases](https://github.com/yw
 |----------|------|
 | Linux amd64 | `grok-inspection_*_linux_amd64.zip` |
 | Linux arm64 | `grok-inspection_*_linux_arm64.zip` |
+| FreeBSD amd64 | `grok-inspection_*_freebsd_amd64.zip` |
 | Windows amd64 | `grok-inspection_*_windows_amd64.zip` |
 | macOS arm64 | `grok-inspection_*_darwin_arm64.zip` |
 

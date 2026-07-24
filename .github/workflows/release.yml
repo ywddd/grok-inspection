@@ -105,9 +105,75 @@ jobs:
           path: ${{ steps.package.outputs.asset }}
           if-no-files-found: error
 
+  build-freebsd-amd64:
+    name: Build freebsd/amd64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            tag="${INPUT_TAG}"
+          fi
+          if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid release tag: ${tag}" >&2
+            exit 1
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+
+      - name: Build in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.3"
+          usesh: true
+          sync: rsync
+          prepare: |
+            pkg install -y go122 || pkg install -y go
+          run: |
+            set -eu
+            GO="$(command -v go122 || command -v go)"
+            "$GO" version
+            "$GO" test ./... -count=1
+            "$GO" build \
+              -buildvcs=false \
+              -buildmode=c-shared \
+              -o "grok-inspection.so" \
+              .
+            "$GO" version -m "grok-inspection.so" | tee build-info.txt
+            grep -q "GOOS=freebsd" build-info.txt
+            grep -q "GOARCH=amd64" build-info.txt
+
+      - name: Pack archive
+        id: package
+        shell: pwsh
+        run: |
+          $asset = "grok-inspection_${{ steps.release.outputs.version }}_freebsd_amd64.zip"
+          Compress-Archive -Path "grok-inspection.so" -DestinationPath $asset -Force
+          "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.package.outputs.asset }}
+          path: ${{ steps.package.outputs.asset }}
+          if-no-files-found: error
+
   release:
     name: Publish release assets
-    needs: build
+    needs:
+      - build
+      - build-freebsd-amd64
     runs-on: ubuntu-latest
 
     steps:

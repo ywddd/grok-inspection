@@ -12,7 +12,9 @@ const uiScriptLang = `
   let lang = detectLang();
   function t(key) {
     const pack = I18N[lang] || I18N.zh;
-    return (pack && pack[key]) || (I18N.zh && I18N.zh[key]) || key;
+    if (pack && Object.prototype.hasOwnProperty.call(pack, key)) return pack[key];
+    if (I18N.zh && Object.prototype.hasOwnProperty.call(I18N.zh, key)) return I18N.zh[key];
+    return key;
   }
   function applyStaticI18n() {
     document.documentElement.lang = (lang === 'en') ? 'en' : 'zh-CN';
@@ -107,7 +109,9 @@ const uiScriptLang = `
   };
   function reasonText(key) {
     const pack = REASON_I18N[lang] || REASON_I18N.zh;
-    return (pack && pack[key]) || (REASON_I18N.zh && REASON_I18N.zh[key]) || key;
+    if (pack && Object.prototype.hasOwnProperty.call(pack, key)) return pack[key];
+    if (REASON_I18N.zh && Object.prototype.hasOwnProperty.call(REASON_I18N.zh, key)) return REASON_I18N.zh[key];
+    return key;
   }
   function formatHTTPProbeTimeout(dur, method, url) {
     return reasonText('http_probe_timeout_head') + dur + reasonText('http_probe_timeout_mid') + method + ' ' + url;

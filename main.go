@@ -14,7 +14,7 @@ import (
 const (
 	pluginName            = "grok-inspection"
 	pluginDisplayName     = "Grok 账号巡检"
-	pluginVersion         = "0.1.16"
+	pluginVersion         = "0.1.17"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -126,6 +126,10 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	if key := resolveManagementPassword(req.Headers); key != "" {
 		rememberManagementCredential(key)
 	}
+	// Warm custom CPA listen-port cache from this trusted management entry so
+	// later headless schedule/autoban dials do not fall back to 8317 when the
+	// UI never performed a management mutation that called callCPAManagement.
+	observeManagementRequestRoute(req.Headers)
 
 	switch {
 	case method == http.MethodGet && matchesResourcePath(req.Path, "/status"):
@@ -249,8 +253,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "missing_auth_id", "ok": false})
 		}
 		password := resolveManagementPassword(req.Headers)
-		// Origin-only snapshot for CPA dial fallback; password stays separate.
-		originHeaders := managementOriginOnlyHeaders(req.Headers)
+		// Host/Origin route snapshot for CPA dial; password stays separate.
+		// Never retain Authorization/Cookie on the async/sync unban context.
+		originHeaders := managementRouteHeaders(req.Headers)
 		enabled, removed, errUnban := unbanOneAccountWithOrigin(authID, password, originHeaders)
 		if errUnban != nil {
 			status := http.StatusBadRequest
@@ -341,8 +346,9 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 	case method == http.MethodPost && matchesManagementPath(req.Path, "/unban-all"):
 		// Async bulk unban so large ban pools do not block the Management handler.
 		password := resolveManagementPassword(req.Headers)
-		// Snapshot Origin before returning; worker must not retain req.Headers.
-		originHeaders := managementOriginOnlyHeaders(req.Headers)
+		// Snapshot Host/Origin route fields before returning; worker must not
+		// retain req.Headers (especially Authorization/Cookie).
+		originHeaders := managementRouteHeaders(req.Headers)
 		var body struct {
 			Category string   `json:"category"`
 			AuthIDs  []string `json:"auth_ids"`

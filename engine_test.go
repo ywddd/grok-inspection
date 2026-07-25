@@ -340,18 +340,29 @@ func TestCallCPAManagementWithAuthUsesRequestPasswordWithoutEnv(t *testing.T) {
 	}
 }
 
-func TestResolveManagementBaseURLIgnoresRequestHeadersByDefault(t *testing.T) {
+// Issue #22: custom CPA port resolution for management dial-back.
+//
+// Priority: explicit base URL env > PORT/CPA_PORT > Host port > Origin port >
+// cached derived port > 8317. Only ports are used; always dial 127.0.0.1.
+// Hostnames from Origin/Forwarded are never used for the default base URL.
+//
+// Real paths:
+//   - stock CPA today: Headers have Origin but usually no Host (r.Host not cloned)
+//   - CPA with host injection: Headers include Host from r.Host
+func TestResolveManagementBaseURLUsesRequestHostPortByDefault(t *testing.T) {
 	oldBase := os.Getenv("CPA_BASE_URL")
 	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
 	oldPort := os.Getenv("PORT")
 	oldCPAPort := os.Getenv("CPA_PORT")
 	oldDefault := getCPAManagementBaseURL()
+	clearDerivedManagementPortCacheForTest()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
 		_ = os.Setenv("PORT", oldPort)
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
 		setCPAManagementBaseURL(oldDefault)
+		clearDerivedManagementPortCacheForTest()
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
@@ -359,19 +370,226 @@ func TestResolveManagementBaseURLIgnoresRequestHeadersByDefault(t *testing.T) {
 	_ = os.Unsetenv("CPA_PORT")
 	setCPAManagementBaseURL("http://127.0.0.1:8317")
 
+	// Host without port: do not invent a port from Host alone. Origin may still
+	// supply an explicit port (see Origin-port test); here Origin has a port so
+	// the derived base follows Origin's port on loopback — never the hostname.
 	headers := http.Header{
-		"Origin":            []string{"https://attacker.example"},
+		"Origin":            []string{"https://attacker.example:4443"},
 		"X-Forwarded-Proto": []string{"https"},
-		"X-Forwarded-Host":  []string{"attacker.example"},
+		"X-Forwarded-Host":  []string{"attacker.example:9999"},
 		"Host":              []string{"attacker.example"},
 	}
-	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:8317" {
-		t.Fatalf("base url = %q, want local management default", got)
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:4443" {
+		t.Fatalf("origin-port loopback = %q, want 127.0.0.1:4443 (not forwarded host)", got)
+	}
+	clearDerivedManagementPortCacheForTest()
+
+	// Injected/present Host port wins over Origin port; hostname discarded.
+	headers = http.Header{
+		"Origin": []string{"https://attacker.example:4443"},
+		"Host":   []string{"cpa.example.com:1109"},
+	}
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:1109" {
+		t.Fatalf("host-port base url = %q, want loopback custom port", got)
 	}
 
+	headers.Set("Host", "203.0.113.9:18080")
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:18080" {
+		t.Fatalf("ipv4 host-port base url = %q", got)
+	}
+
+	headers.Set("Host", "[2001:db8::1]:19090")
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:19090" {
+		t.Fatalf("ipv6 host-port base url = %q", got)
+	}
+
+	// Malformed Host ports fall through; without Origin port -> default.
+	clearDerivedManagementPortCacheForTest()
+	for _, host := range []string{"cpa.example.com:notaport", "cpa.example.com:0", "cpa.example.com:70000", "[::1]", "127.0.0.1"} {
+		headers = http.Header{"Host": []string{host}}
+		if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:8317" {
+			t.Fatalf("host %q base url = %q, want safe default", host, got)
+		}
+	}
+
+	// Explicit env still wins over Host/Origin port.
+	headers = http.Header{
+		"Host":   []string{"cpa.example.com:1109"},
+		"Origin": []string{"https://cpa.example.com:1109"},
+	}
+	_ = os.Setenv("PORT", "6550")
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:6550" {
+		t.Fatalf("PORT env should beat Host port: %q", got)
+	}
+	_ = os.Unsetenv("PORT")
 	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", "http://127.0.0.1:9999")
 	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:9999" {
-		t.Fatalf("env base url = %q", got)
+		t.Fatalf("explicit management base url = %q", got)
+	}
+}
+
+// Real CPA integration path today: ServeManagementHTTP clones r.Header only, so
+// Host is absent while browser Origin carries the page URL (including custom port).
+func TestResolveManagementBaseURLUsesOriginPortOnStockCPAPath(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDefault := getCPAManagementBaseURL()
+	clearDerivedManagementPortCacheForTest()
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		setCPAManagementBaseURL(oldDefault)
+		clearDerivedManagementPortCacheForTest()
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Unsetenv("PORT")
+	_ = os.Unsetenv("CPA_PORT")
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
+
+	// Headers shaped like a real ManagementRequest from stock CPA:
+	// Authorization/Origin present, Host absent, Forwarded may be spoofed.
+	headers := http.Header{
+		"Authorization":     []string{"Bearer page-key"},
+		"Origin":            []string{"http://192.168.1.4:1109"},
+		"X-Forwarded-Host":  []string{"evil.example:443"},
+		"X-Forwarded-Proto": []string{"https"},
+	}
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:1109" {
+		t.Fatalf("stock CPA origin-port path = %q, want loopback:1109", got)
+	}
+
+	// Async / header-less follow-up reuses the cached port only.
+	if got := resolveManagementBaseURL(nil); got != "http://127.0.0.1:1109" {
+		t.Fatalf("cached derived port = %q, want 1109 for async workers", got)
+	}
+
+	// Forwarded alone never derives a port.
+	clearDerivedManagementPortCacheForTest()
+	headers = http.Header{
+		"X-Forwarded-Host": []string{"evil.example:443"},
+	}
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:8317" {
+		t.Fatalf("forwarded-only must stay default: %q", got)
+	}
+
+	// Origin without explicit port (reverse-proxy 443/80) does not guess 443/80.
+	clearDerivedManagementPortCacheForTest()
+	headers = http.Header{"Origin": []string{"https://cpa.example.com"}}
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:8317" {
+		t.Fatalf("origin without port must not assume 443: %q", got)
+	}
+}
+
+// Integration: stock CPA ManagementRequest shape has Origin (browser) but no Host
+// (r.Host is not cloned into Headers). The dial must hit 127.0.0.1:<origin-port>,
+// and a later header-less background call must reuse the cached port.
+func TestCallCPAManagementDialsLoopbackOriginPortOnStockCPAHeaders(t *testing.T) {
+	clearManagementCredentialCacheForTest()
+	clearDerivedManagementPortCacheForTest()
+	t.Cleanup(func() {
+		clearManagementCredentialCacheForTest()
+		clearDerivedManagementPortCacheForTest()
+	})
+
+	var mu sync.Mutex
+	var hits []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.Host+" "+r.URL.Path)
+		mu.Unlock()
+		if r.Header.Get("Authorization") != "Bearer page-key" {
+			t.Errorf("authorization = %q", r.Header.Get("Authorization"))
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := u.Port()
+	if port == "" {
+		t.Fatalf("test server port empty: %s", server.URL)
+	}
+	wantHost := "127.0.0.1:" + port
+
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDefault := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		setCPAManagementBaseURL(oldDefault)
+		setCPAManagementDo(oldDo)
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Unsetenv("PORT")
+	_ = os.Unsetenv("CPA_PORT")
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
+
+	var dialHosts []string
+	setCPAManagementDo(func(req *http.Request) (*http.Response, error) {
+		dialHosts = append(dialHosts, req.URL.Host)
+		return server.Client().Do(req)
+	})
+
+	// Stock CPA headers: Origin present, Host absent, Forwarded untrusted.
+	headers := http.Header{
+		"Origin":            []string{"http://cpa.example.lan:" + port},
+		"X-Forwarded-Host":  []string{"evil.example:443"},
+		"X-Forwarded-Proto": []string{"https"},
+	}
+	status, _, err := callCPAManagementWithAuth(
+		http.MethodPatch,
+		"/v0/management/auth-files/status",
+		[]byte(`{"disabled":true}`),
+		"page-key",
+		headers,
+	)
+	if err != nil {
+		t.Fatalf("first dial: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if len(dialHosts) != 1 || dialHosts[0] != wantHost {
+		t.Fatalf("first dial host = %#v, want [%q]", dialHosts, wantHost)
+	}
+
+	// Background / async path: no headers, must use cached derived port.
+	status, _, err = callCPAManagementWithAuth(
+		http.MethodPatch,
+		"/v0/management/auth-files/status",
+		[]byte(`{"disabled":true}`),
+		"page-key",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("cached dial: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("cached status = %d", status)
+	}
+	if len(dialHosts) != 2 || dialHosts[1] != wantHost {
+		t.Fatalf("cached dial hosts = %#v, want two %q", dialHosts, wantHost)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 2 {
+		t.Fatalf("server hits = %#v, want 2", hits)
 	}
 }
 
@@ -552,11 +770,14 @@ func TestCallCPAManagementDoesNotRetryOriginAfterHTTPError(t *testing.T) {
 		setCPAManagementDo(oldDo)
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
-	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	// Pin the primary endpoint via env so Origin's port cannot become the default
+	// loopback base (issue #22). This test covers HTTP-error non-retry only.
+	_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", local.URL)
 	_ = os.Unsetenv("PORT")
 	_ = os.Unsetenv("CPA_PORT")
 	setCPAManagementBaseURL(local.URL)
 	setCPAManagementDo(local.Client().Do)
+	clearDerivedManagementPortCacheForTest()
 
 	_, _, err := callCPAManagementWithAuth(
 		http.MethodPatch,
@@ -993,6 +1214,7 @@ func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
 	oldCPAPort := os.Getenv("CPA_PORT")
 	oldTLS := os.Getenv("CPA_TLS")
 	oldDefault := getCPAManagementBaseURL()
+	clearDerivedManagementPortCacheForTest()
 	defer func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
@@ -1000,6 +1222,7 @@ func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
 		_ = os.Setenv("CPA_PORT", oldCPAPort)
 		_ = os.Setenv("CPA_TLS", oldTLS)
 		setCPAManagementBaseURL(oldDefault)
+		clearDerivedManagementPortCacheForTest()
 	}()
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
@@ -1014,6 +1237,97 @@ func TestResolveManagementBaseURLUsesHTTPSWhenTLSEnvSet(t *testing.T) {
 	_ = os.Setenv("PORT", "9443")
 	if got := resolveManagementBaseURL(nil); got != "https://127.0.0.1:9443" {
 		t.Fatalf("tls port base url = %q", got)
+	}
+	_ = os.Unsetenv("PORT")
+	// TLS + custom Host port still stays on loopback https.
+	headers := http.Header{"Host": []string{"cpa.example.com:10443"}}
+	if got := resolveManagementBaseURL(headers); got != "https://127.0.0.1:10443" {
+		t.Fatalf("tls host-port base url = %q", got)
+	}
+}
+
+// Origin hostname is never used for the default base URL — only its port, and
+// always against loopback. Full Origin URL remains a transport-failure retry
+// path (#18) separate from this default resolution.
+func TestResolveManagementBaseURLNeverUsesOriginHostname(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDefault := getCPAManagementBaseURL()
+	clearDerivedManagementPortCacheForTest()
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		setCPAManagementBaseURL(oldDefault)
+		clearDerivedManagementPortCacheForTest()
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	_ = os.Unsetenv("PORT")
+	_ = os.Unsetenv("CPA_PORT")
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
+
+	headers := http.Header{
+		"Origin":           []string{"https://cpa.example.com:1109"},
+		"X-Forwarded-Host": []string{"evil.example:443"},
+	}
+	got := resolveManagementBaseURL(headers)
+	if got != "http://127.0.0.1:1109" {
+		t.Fatalf("base url = %q, want loopback port from Origin only", got)
+	}
+	if strings.Contains(got, "cpa.example.com") || strings.Contains(got, "evil.example") {
+		t.Fatalf("hostname leaked into default base url: %q", got)
+	}
+}
+
+// Invalid PORT/CPA_PORT must not become a broken base URL that blocks Host/Origin.
+func TestResolveManagementBaseURLIgnoresInvalidPORTEnv(t *testing.T) {
+	oldBase := os.Getenv("CPA_BASE_URL")
+	oldMgmt := os.Getenv("CPA_MANAGEMENT_BASE_URL")
+	oldPort := os.Getenv("PORT")
+	oldCPAPort := os.Getenv("CPA_PORT")
+	oldDefault := getCPAManagementBaseURL()
+	clearDerivedManagementPortCacheForTest()
+	defer func() {
+		_ = os.Setenv("CPA_BASE_URL", oldBase)
+		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
+		_ = os.Setenv("PORT", oldPort)
+		_ = os.Setenv("CPA_PORT", oldCPAPort)
+		setCPAManagementBaseURL(oldDefault)
+		clearDerivedManagementPortCacheForTest()
+	}()
+	_ = os.Unsetenv("CPA_BASE_URL")
+	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")
+	setCPAManagementBaseURL("http://127.0.0.1:8317")
+
+	headers := http.Header{
+		"Host":   []string{"cpa.example.com:1109"},
+		"Origin": []string{"http://cpa.example.com:1109"},
+	}
+	for _, bad := range []string{"", "abc", "0", "70000", ":-1", ":notaport"} {
+		_ = os.Setenv("PORT", bad)
+		_ = os.Unsetenv("CPA_PORT")
+		if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:1109" {
+			t.Fatalf("PORT=%q should fall through to Host port, got %q", bad, got)
+		}
+		clearDerivedManagementPortCacheForTest()
+	}
+	// Valid CPA_PORT still wins after TrimPrefix of leading colon.
+	_ = os.Unsetenv("PORT")
+	_ = os.Setenv("CPA_PORT", ":9444")
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:9444" {
+		t.Fatalf("valid CPA_PORT = %q", got)
+	}
+
+	// Garbage PORT must not shadow a later valid CPA_PORT.
+	clearDerivedManagementPortCacheForTest()
+	_ = os.Setenv("PORT", "not-a-port")
+	_ = os.Setenv("CPA_PORT", "12001")
+	if got := resolveManagementBaseURL(headers); got != "http://127.0.0.1:12001" {
+		t.Fatalf("valid CPA_PORT after garbage PORT = %q, want 12001", got)
 	}
 }
 

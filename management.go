@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -216,15 +217,40 @@ func requestManagementBaseURL(headers http.Header) string {
 	return normalizeHTTPOrigin(headerValue(headers, "Origin"))
 }
 
-// managementOriginOnlyHeaders returns a detached header map containing only a
-// normalized Origin value for management transport fallback. Authorization,
-// Cookie, and other secrets are never copied. Safe for async workers.
-func managementOriginOnlyHeaders(headers http.Header) http.Header {
-	origin := requestManagementBaseURL(headers)
-	if origin == "" {
+// managementRouteHeaders returns a detached map with only safe management-routing
+// fields: Host when it carries a valid TCP port, and a normalized Origin.
+// Authorization, Cookie, and other secrets are never copied. Safe for async workers.
+func managementRouteHeaders(headers http.Header) http.Header {
+	if headers == nil {
 		return nil
 	}
-	return http.Header{"Origin": []string{origin}}
+	out := http.Header{}
+	if host := strings.TrimSpace(headerValue(headers, "Host")); host != "" {
+		if requestHostPort(http.Header{"Host": []string{host}}) != "" {
+			out.Set("Host", host)
+		}
+	}
+	if origin := requestManagementBaseURL(headers); origin != "" {
+		out.Set("Origin", origin)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// managementOriginOnlyHeaders is the historical name for managementRouteHeaders.
+// It keeps Host+Origin route fields only (never secrets) for async CPA dials.
+func managementOriginOnlyHeaders(headers http.Header) http.Header {
+	return managementRouteHeaders(headers)
+}
+
+// observeManagementRequestRoute warms the port-only cache from a trusted
+// ManagementRequest that entered the plugin. Schedule/autoban workers often
+// dial with nil headers later; without this, saving a schedule alone never
+// calls callCPAManagement and the first background action still falls to 8317.
+func observeManagementRequestRoute(headers http.Header) {
+	_ = requestDerivedManagementPort(headers)
 }
 
 func configuredManagementBaseURL() (string, bool) {
@@ -234,8 +260,113 @@ func configuredManagementBaseURL() (string, bool) {
 	return "", false
 }
 
+// derivedManagementPortCache remembers a request-derived listen port so async
+// workers (autoban / schedule) can reuse the custom CPA port after any trusted
+// Management request observed Host/Origin (not only after callCPAManagement).
+// Only the port is cached; hostnames are never stored.
+var derivedManagementPortCache = struct {
+	mu   sync.RWMutex
+	port string
+}{}
+
+func rememberDerivedManagementPort(port string) {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return
+	}
+	derivedManagementPortCache.mu.Lock()
+	derivedManagementPortCache.port = port
+	derivedManagementPortCache.mu.Unlock()
+}
+
+func cachedDerivedManagementPort() string {
+	derivedManagementPortCache.mu.RLock()
+	defer derivedManagementPortCache.mu.RUnlock()
+	return strings.TrimSpace(derivedManagementPortCache.port)
+}
+
+// firstValidEnvTCPPort returns the first valid TCP port among env keys in order.
+// Empty or invalid values are skipped so a later valid key can still win.
+func firstValidEnvTCPPort(keys ...string) string {
+	for _, key := range keys {
+		raw := strings.TrimPrefix(strings.TrimSpace(os.Getenv(key)), ":")
+		if port := validTCPPort(raw); port != "" {
+			return port
+		}
+	}
+	return ""
+}
+
+// validTCPPort returns port when it is an integer in [1,65535], else "".
+func validTCPPort(port string) string {
+	port = strings.TrimSpace(port)
+	if port == "" {
+		return ""
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return ""
+	}
+	return port
+}
+
+// requestHostPort extracts only a valid TCP port from the request Host header.
+// The hostname is discarded; callers always dial loopback with this port.
+//
+// On stock CPA, net/http keeps the wire Host on r.Host and ServeManagementHTTP
+// historically cloned only r.Header, so Host is often absent here. Prefer CPA
+// host injection (managementRequestHeaders) when available; otherwise fall
+// through to Origin-port derivation.
+func requestHostPort(headers http.Header) string {
+	host := headerValue(headers, "Host")
+	if host == "" {
+		return ""
+	}
+	// net.SplitHostPort accepts "name:port", "ip:port", and "[ipv6]:port".
+	_, port, err := net.SplitHostPort(host)
+	if err != nil {
+		return ""
+	}
+	return validTCPPort(port)
+}
+
+// requestOriginPort extracts only a valid explicit TCP port from Origin.
+// Security boundary:
+//   - hostname is never used for the default management base URL
+//   - X-Forwarded-* is ignored
+//   - Origin must already pass normalizeHTTPOrigin (http/https, no userinfo/path)
+//   - default ports 80/443 (empty u.Port) are NOT assumed; those installs need
+//     PORT / CPA_MANAGEMENT_BASE_URL when reverse-proxied
+//
+// This is the realistic source on current CPA builds that do not inject Host.
+func requestOriginPort(headers http.Header) string {
+	origin := requestManagementBaseURL(headers)
+	if origin == "" {
+		return ""
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u == nil {
+		return ""
+	}
+	return validTCPPort(u.Port())
+}
+
+// requestDerivedManagementPort picks a custom listen port from the request:
+// Host port (post-CPA injection) > Origin port (browser page origin) > cache.
+// Always intended for loopback dialing only.
+func requestDerivedManagementPort(headers http.Header) string {
+	if port := requestHostPort(headers); port != "" {
+		rememberDerivedManagementPort(port)
+		return port
+	}
+	if port := requestOriginPort(headers); port != "" {
+		rememberDerivedManagementPort(port)
+		return port
+	}
+	return cachedDerivedManagementPort()
+}
+
 func resolveManagementBaseURL(headers http.Header) string {
-	_ = headers // Request headers are used only as a transport-failure fallback.
 	if value, ok := configuredManagementBaseURL(); ok {
 		return value
 	}
@@ -243,8 +374,15 @@ func resolveManagementBaseURL(headers http.Header) string {
 	if managementTLSPreferred() {
 		scheme = "https"
 	}
-	if port := strings.TrimSpace(firstNonEmpty(os.Getenv("PORT"), os.Getenv("CPA_PORT"))); port != "" {
-		port = strings.TrimPrefix(port, ":")
+	// PORT then CPA_PORT, each validated independently. A garbage PORT must not
+	// shadow a valid CPA_PORT (firstNonEmpty alone is not enough).
+	if port := firstValidEnvTCPPort("PORT", "CPA_PORT"); port != "" {
+		return scheme + "://127.0.0.1:" + port
+	}
+	// No explicit management URL / PORT: derive ONLY a port from the request
+	// (Host if CPA injected it, else Origin) and always dial loopback.
+	// Never trust Origin/Forwarded hostnames for the default base URL.
+	if port := requestDerivedManagementPort(headers); port != "" {
 		return scheme + "://127.0.0.1:" + port
 	}
 	if scheme == "https" {

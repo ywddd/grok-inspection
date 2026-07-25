@@ -56,17 +56,46 @@ func saveInspectionScheduleSync(cfg persistedInspectionSchedule) error {
 	return replaceFileWithRetry(tempName, path)
 }
 
+// legacySchedulePathFor returns the historical CWD-relative schedule.json when it
+// differs from the current path, so upgrades can still read pre-state_file data.
+func legacySchedulePathFor(current string) string {
+	legacy := filepath.Join(legacyInspectionDataDir(), "schedule.json")
+	if filepath.Clean(legacy) == filepath.Clean(current) {
+		return ""
+	}
+	return legacy
+}
+
 func loadScheduleJSONUnlocked() (persistedInspectionSchedule, error) {
 	path := scheduleFilePath()
 	raw, err := os.ReadFile(path)
+	fromLegacy := false
 	if err != nil {
-		return persistedInspectionSchedule{}, err
+		if os.IsNotExist(err) {
+			// Independent of results.json: a schedule-only legacy file still migrates
+			// when the new state_file directory has no schedule.json yet.
+			if legacy := legacySchedulePathFor(path); legacy != "" {
+				if legacyRaw, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+					raw, err = legacyRaw, nil
+					fromLegacy = true
+				}
+			}
+		}
+		if err != nil {
+			return persistedInspectionSchedule{}, err
+		}
 	}
 	var cfg persistedInspectionSchedule
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		return persistedInspectionSchedule{}, err
 	}
-	return normalizePersistedInspectionSchedule(cfg), nil
+	cfg = normalizePersistedInspectionSchedule(cfg)
+	// Seed durable path without calling saveInspectionScheduleSync (would
+	// re-lock scheduleIOMu). Never overwrites an existing file.
+	if fromLegacy {
+		writeFileIfAbsent(path, raw, 0o600)
+	}
+	return cfg, nil
 }
 
 // loadInspectionScheduleFromDisk prefers schedule.json; falls back to results.json

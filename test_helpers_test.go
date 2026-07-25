@@ -28,6 +28,12 @@ func isolateActiveStore(t *testing.T) {
 
 // ---- package-level test hooks (production code must not call these) ----
 
+func getStorePathOverrideForTest() string {
+	storeMu.Lock()
+	defer storeMu.Unlock()
+	return storePathOverride
+}
+
 func setStoreFilePathForTest(path string) {
 	storeMu.Lock()
 	defer storeMu.Unlock()
@@ -93,4 +99,10 @@ func rearmBanDisposeWorkersForTest() {
 	q.queued = 0
 	q.inFlight = 0
 	q.mu.Unlock()
+}
+
+func clearDerivedManagementPortCacheForTest() {
+	derivedManagementPortCache.mu.Lock()
+	derivedManagementPortCache.port = ""
+	derivedManagementPortCache.mu.Unlock()
 }

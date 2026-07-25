@@ -185,7 +185,7 @@ func unbanOneAccount(authID, password string) (enabled bool, removed bool, err e
 }
 
 // unbanOneAccountWithOrigin is the operator unban path. originHeaders must be a
-// detached Origin-only map (or nil); never pass the live request header map.
+// detached Host/Origin route map (or nil); never pass the live request header map.
 func unbanOneAccountWithOrigin(authID, password string, originHeaders http.Header) (enabled bool, removed bool, err error) {
 	authID = strings.TrimSpace(authID)
 	if authID == "" {
@@ -196,8 +196,8 @@ func unbanOneAccountWithOrigin(authID, password string, originHeaders http.Heade
 		return false, false, errClaim
 	}
 	defer releaseUnbanSlot(runID)
-	// Detach Origin-only context; never retain a live request header map.
-	originHeaders = managementOriginOnlyHeaders(originHeaders)
+	// Detach Host/Origin route context; never retain a live request header map.
+	originHeaders = managementRouteHeaders(originHeaders)
 
 	entry, hadEntry := activeStore.Get(authID)
 	expectedRev := entry.Revision
@@ -277,8 +277,8 @@ func startUnbanJob(authIDs []string, category, password string) error {
 	return startUnbanJobWithOrigin(authIDs, category, password, nil)
 }
 
-// startUnbanJobWithOrigin snapshots a detached Origin-only context before the
-// async worker starts so request header maps can be mutated after return.
+// startUnbanJobWithOrigin snapshots a detached Host/Origin route context before
+// the async worker starts so request header maps can be mutated after return.
 func startUnbanJobWithOrigin(authIDs []string, category, password string, originHeaders http.Header) error {
 	category = strings.ToLower(strings.TrimSpace(category))
 	wanted := make(map[string]struct{})
@@ -319,8 +319,8 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 		return errClaim
 	}
 	password = strings.TrimSpace(password)
-	// Detach and re-normalize before the goroutine; never retain the caller map.
-	originHeaders = managementOriginOnlyHeaders(originHeaders)
+	// Detach and re-normalize route fields before the goroutine; never retain secrets.
+	originHeaders = managementRouteHeaders(originHeaders)
 
 	go func() {
 		defer unbanJob.wg.Done()

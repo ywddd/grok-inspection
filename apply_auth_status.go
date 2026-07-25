@@ -25,7 +25,7 @@ func setAuthDisabledWithBanReason(name string, disabled bool, password string, h
 	if resolvedPassword == "" {
 		resolvedPassword = resolveManagementPassword(headers)
 	}
-	originHeaders := managementOriginOnlyHeaders(headers)
+	originHeaders := managementRouteHeaders(headers)
 	target, errTarget := findAuthFile(name)
 	if errTarget != nil {
 		return errTarget

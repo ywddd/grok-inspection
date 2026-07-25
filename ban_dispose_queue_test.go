@@ -205,10 +205,18 @@ func installCPAManagementDialForTest(t interface {
 	t.Helper()
 	oldBase := getCPAManagementBaseURL()
 	oldDo := getCPAManagementDo()
+	// Derived Host/Origin port cache outranks getCPAManagementBaseURL(). Clear it
+	// so tests that only swap the default dial base are not hijacked by a prior case.
+	oldPort := cachedDerivedManagementPort()
+	clearDerivedManagementPortCacheForTest()
 	setCPAManagementDial(baseURL, do)
 	t.Cleanup(func() {
 		freezeAndWaitBanDisposeIdleForTest(t)
 		setCPAManagementDial(oldBase, oldDo)
+		clearDerivedManagementPortCacheForTest()
+		if oldPort != "" {
+			rememberDerivedManagementPort(oldPort)
+		}
 		unfreezeBanDisposeWorkersForTest()
 	})
 }

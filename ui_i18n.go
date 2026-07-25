@@ -26,8 +26,9 @@ const uiI18NJS = `  const I18N = {
       help_title:'巡检说明',
       help_autoban_title:'实时自动禁用说明',
       help_inspect_p1:'<strong>开始巡检</strong>会清空已有结果并重新检测全部可用账号。',
-      help_inspect_p2:'<strong>增量巡检</strong>只检测新增账号；<strong>巡检当前分类</strong>只重测当前选中的分类。',
-      help_inspect_p3:'<strong>抽检</strong>按数量或比例随机检测，其他已保存结果保持不变。',
+      help_inspect_p2:'<strong>增量巡检</strong>只检测新增账号。',
+      help_inspect_p3:'<strong>巡检当前分类</strong>只重测当前选中的分类。',
+      help_inspect_p4:'<strong>抽检</strong>按数量或比例随机检测，其他已保存结果保持不变。',
       help_autoban_p1:'<strong>实时自动禁用</strong>会记录命中响应，并将账号池状态同步到 CPA。',
       help_autoban_p2:'<strong>额度用尽</strong>账号会在冷却窗口结束后恢复；其他原因需要手动解禁。',
 
@@ -172,8 +173,9 @@ const uiI18NJS = `  const I18N = {
       help_title:'Inspection help',
       help_autoban_title:'Realtime auto-ban help',
       help_inspect_p1:'<strong>Start</strong> clears saved results and checks every eligible account.',
-      help_inspect_p2:'<strong>Incremental</strong> checks only accounts added since the last run. <strong>Inspect category</strong> reruns the active result category.',
-      help_inspect_p3:'<strong>Sample</strong> randomly checks by count or percentage and keeps all other saved results.',
+      help_inspect_p2:'<strong>Incremental</strong> checks only accounts added since the last run.',
+      help_inspect_p3:'<strong>Inspect category</strong> reruns the active result category.',
+      help_inspect_p4:'<strong>Sample</strong> randomly checks by count or percentage and keeps all other saved results.',
       help_autoban_p1:'<strong>Realtime auto-ban</strong> records matching responses and synchronizes the account pool with CPA.',
       help_autoban_p2:'<strong>Quota exhausted</strong> accounts recover after their cooldown window. Other reasons require manual unban.',
 

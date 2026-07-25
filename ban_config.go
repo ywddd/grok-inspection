@@ -242,6 +242,10 @@ func registerPlugin(raw []byte) error {
 	if !pluginRegistered {
 		currentConfig.Store(cfg)
 		loadBanState(cfg)
+		// init() may have loaded results/schedule against the default path before
+		// CPA delivered the real state_file. Re-read now so mounted history wins
+		// before the schedule loop observes engine state.
+		engine.loadFromDisk()
 		startInspectionScheduleLoop()
 		pluginRegistered = true
 		return nil

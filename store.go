@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -53,8 +54,40 @@ func storeFilePath() string {
 	if dir := firstNonEmpty(os.Getenv("GROK_INSPECTION_DATA_DIR")); dir != "" {
 		return filepath.Join(dir, "results.json")
 	}
+	// Follow the configured state_file directory so results.json lives in the
+	// same (mounted) volume as bans.json and survives container recreation.
+	if dir := stateFileDir(); dir != "" {
+		return filepath.Join(dir, "results.json")
+	}
 	// Prefer a stable data dir under the process working directory (CPA cwd).
-	return filepath.Join("data", "grok-inspection", "results.json")
+	return filepath.Join(legacyInspectionDataDir(), "results.json")
+}
+
+// stateFileDir returns the directory of the configured ban state_file, or "".
+// Both results.json and schedule.json follow it so all persisted plugin state
+// shares one durable location instead of splitting across mounted/unmounted dirs.
+func stateFileDir() string {
+	if p := loadedConfig().StateFile; p != "" {
+		return filepath.Dir(p)
+	}
+	return ""
+}
+
+// legacyInspectionDataDir is the historical CWD-relative data dir used before
+// state persisted alongside state_file. Kept for read/migration fallback.
+func legacyInspectionDataDir() string {
+	return filepath.Join("data", "grok-inspection")
+}
+
+// legacyResultsPathFor returns the old CWD-relative results.json when it differs
+// from the given (current) path, so upgrades migrating to the state_file dir can
+// still read pre-existing history exactly once.
+func legacyResultsPathFor(current string) string {
+	legacy := filepath.Join(legacyInspectionDataDir(), "results.json")
+	if filepath.Clean(legacy) == filepath.Clean(current) {
+		return ""
+	}
+	return legacy
 }
 
 func loadPersistedSnapshot() (persistedSnapshot, error) {
@@ -83,11 +116,101 @@ func loadPersistedSnapshot() (persistedSnapshot, error) {
 	return persistedSnapshot{}, last
 }
 
+// writeFileIfAbsent seeds path with raw only when the destination does not
+// already exist. Used for one-shot legacy -> state_file migrations.
+//
+// Writes a same-directory temp file first, then renames into place so a crash
+// cannot leave a half-written durable target that would block later O_EXCL
+// retries. Never overwrites an existing destination. Best-effort: callers
+// ignore errors so a successful legacy read still returns data.
+//
+// Must not call store/schedule save helpers (those re-take IO mutexes). Callers
+// are expected to already hold the relevant IO mutex when seeding.
+func writeFileIfAbsent(path string, raw []byte, perm os.FileMode) {
+	if strings.TrimSpace(path) == "" || raw == nil {
+		return
+	}
+	if perm == 0 {
+		perm = 0o644
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, ".grok-inspection-seed-*.tmp")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	promoted := false
+	defer func() {
+		_ = tmp.Close()
+		if !promoted {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(perm); err != nil {
+		// Windows may reject Chmod on some volumes; contents still matter more.
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		return
+	}
+	// Re-check under the caller's IO mutex before promoting.
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	// rename is atomic on the same volume. Windows fails if dest exists; Unix
+	// would replace, so the Stat guard above is required (held under IO mutex).
+	if err := os.Rename(tmpName, path); err == nil {
+		promoted = true
+		return
+	}
+	// Windows/SMB fallback: only write when dest is still missing (same spirit
+	// as replaceFileWithRetry, but never overwrite an existing durable file).
+	if _, err := os.Stat(path); err == nil {
+		return
+	}
+	data, errRead := os.ReadFile(tmpName)
+	if errRead != nil {
+		return
+	}
+	f, errOpen := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if errOpen != nil {
+		return
+	}
+	_, werr := f.Write(data)
+	cerr := f.Close()
+	if werr != nil || cerr != nil {
+		_ = os.Remove(path) // allow a later migration retry
+		return
+	}
+}
+
 func readPersistedSnapshotUnlocked() (persistedSnapshot, error) {
 	path := storeFilePath()
 	raw, err := os.ReadFile(path)
+	fromLegacy := false
 	if err != nil {
-		return persistedSnapshot{}, err
+		if os.IsNotExist(err) {
+			if legacy := legacyResultsPathFor(path); legacy != "" {
+				if legacyRaw, legacyErr := os.ReadFile(legacy); legacyErr == nil {
+					raw, err = legacyRaw, nil
+					fromLegacy = true
+				}
+			}
+		}
+		if err != nil {
+			return persistedSnapshot{}, err
+		}
 	}
 	var snap persistedSnapshot
 	if err := json.Unmarshal(raw, &snap); err != nil {
@@ -95,6 +218,11 @@ func readPersistedSnapshotUnlocked() (persistedSnapshot, error) {
 	}
 	if snap.Results == nil {
 		snap.Results = []accountResult{}
+	}
+	// Seed the durable state_file directory so the next container boot does not
+	// depend on the legacy CWD path still being present.
+	if fromLegacy {
+		writeFileIfAbsent(path, raw, 0o644)
 	}
 	return snap, nil
 }

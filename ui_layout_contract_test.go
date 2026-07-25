@@ -129,7 +129,7 @@ func TestUILayoutBilingualContract(t *testing.T) {
 	en := extractI18NPack(page, "en")
 	for _, key := range []string{
 		"title", "help_title", "help_autoban_title",
-		"help_inspect_p1", "help_inspect_p2", "help_inspect_p3",
+		"help_inspect_p1", "help_inspect_p2", "help_inspect_p3", "help_inspect_p4",
 		"help_autoban_p1", "help_autoban_p2",
 		"ban_title", "tab_inspect", "tab_autoban",
 	} {
@@ -148,6 +148,21 @@ func TestUILayoutBilingualContract(t *testing.T) {
 	}
 	if zh["title"] == en["title"] {
 		t.Fatal("zh/en page titles should differ")
+	}
+	if strings.Contains(zh["help_inspect_p2"], "巡检当前分类") ||
+		strings.Contains(en["help_inspect_p2"], "Inspect category") {
+		t.Fatal("incremental and current-category help must be separate paragraphs")
+	}
+	if !strings.Contains(zh["help_inspect_p3"], "巡检当前分类") ||
+		!strings.Contains(en["help_inspect_p3"], "Inspect category") {
+		t.Fatal("current-category help paragraph missing")
+	}
+	if !strings.Contains(zh["help_inspect_p4"], "抽检") ||
+		!strings.Contains(en["help_inspect_p4"], "Sample") {
+		t.Fatal("sampling help paragraph missing")
+	}
+	if !strings.Contains(page, "['help_inspect_p1', 'help_inspect_p2', 'help_inspect_p3', 'help_inspect_p4']") {
+		t.Fatal("inspection help renderer must include four paragraphs")
 	}
 }
 

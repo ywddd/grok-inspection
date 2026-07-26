@@ -68,6 +68,12 @@ const uiScriptSchedule = `  const classLabel = {
     if (data.last_error) text += ' · ' + data.last_error;
     return text;
   }
+  // Sample scope reuses the toolbar sample count/percent instead of a second copy.
+  function syncScheduleScopeFields() {
+    const sample = $('scheduleScope') && $('scheduleScope').value === 'sample';
+    const row = $('samplingRow');
+    if (row) row.classList.toggle('schedule-linked', !!sample);
+  }
   function renderSchedule(data, hydrate) {
     if (!data || typeof data !== 'object') return;
     if (hydrate && !scheduleDirty) {
@@ -75,6 +81,13 @@ const uiScriptSchedule = `  const classLabel = {
       $('scheduleInterval').value = String(data.interval_minutes || 60);
       $('scheduleWorkers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
       $('scheduleIncludeDisabled').checked = !!data.include_disabled;
+      $('scheduleScope').value = data.scope === 'sample' ? 'sample' : 'full';
+      if (data.scope === 'sample') {
+        // Only seed empty toolbar inputs so a saved schedule never clobbers local edits.
+        if (data.sample_count && !$('sampleCount').value) $('sampleCount').value = String(data.sample_count);
+        if (data.sample_percent && !$('samplePercent').value) $('samplePercent').value = String(data.sample_percent);
+      }
+      syncScheduleScopeFields();
       $('schedule403Action').value = data.permission_denied_action === 'delete' ? 'delete' : 'disable';
       $('schedule402Action').value = data.spending_limit_action === 'delete' ? 'delete' : 'disable';
     }
@@ -113,6 +126,25 @@ const uiScriptSchedule = `  const classLabel = {
       showErr(t('workers_range_prefix') + WORKERS_MIN + '-' + WORKERS_MAX + t('workers_range_suffix'));
       return;
     }
+    const scope = $('scheduleScope').value === 'sample' ? 'sample' : 'full';
+    let sampleCount = 0;
+    let samplePercent = 0;
+    if (scope === 'sample') {
+      let sample;
+      try {
+        sample = parseSampleInputs();
+      } catch (e) {
+        showErr(String(e.message || e));
+        return;
+      }
+      if (!sample.count && !sample.percent) {
+        showErr(t('sample_need_params'));
+        return;
+      }
+      saveSamplePrefs(sample);
+      sampleCount = sample.count;
+      samplePercent = sample.percent;
+    }
     const action = $('schedule403Action').value === 'delete' ? 'delete' : 'disable';
     const action402 = $('schedule402Action').value === 'delete' ? 'delete' : 'disable';
     if (action === 'delete' || action402 === 'delete') {
@@ -134,6 +166,9 @@ const uiScriptSchedule = `  const classLabel = {
           interval_minutes: interval,
           workers,
           include_disabled: $('scheduleIncludeDisabled').checked,
+          scope,
+          sample_count: sampleCount,
+          sample_percent: samplePercent,
           permission_denied_action: action,
           spending_limit_action: action402
         })

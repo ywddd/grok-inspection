@@ -23,11 +23,13 @@ const uiScriptWire = `  function wireExclusive() {
       savePrefs({ includeDisabled: include.checked, onlyDisabled: only.checked });
     };
   }
-  ['scheduleEnabled', 'scheduleInterval', 'scheduleWorkers', 'scheduleIncludeDisabled', 'schedule403Action', 'schedule402Action'].forEach((id) => {
+  ['scheduleEnabled', 'scheduleInterval', 'scheduleWorkers', 'scheduleIncludeDisabled', 'scheduleScope', 'schedule403Action', 'schedule402Action'].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener('input', () => { scheduleDirty = true; });
     if (el) el.addEventListener('change', () => { scheduleDirty = true; });
   });
+  const scheduleScopeEl = $('scheduleScope');
+  if (scheduleScopeEl) scheduleScopeEl.addEventListener('change', () => { syncScheduleScopeFields(); });
   ['sampleCount', 'samplePercent'].forEach((id) => {
     const el = $(id);
     if (!el) return;

@@ -101,6 +101,7 @@ func (e *inspectionEngine) startWithRunID(req startRequest) (uint64, error) {
 	e.runIsFullInspect = !req.Incremental && !classifyScoped && !sampleMode
 	e.runListOK = false
 	e.runListError = ""
+	e.runProbedKeys = nil
 	e.total = 0
 	e.probeDone = 0
 	e.probePhase = "listing"
@@ -318,6 +319,7 @@ func (e *inspectionEngine) finish(runID uint64) {
 	e.lastFinishedListOK = e.runListOK
 	e.lastFinishedListError = e.runListError
 	e.lastFinishedFullInspect = e.runIsFullInspect
+	e.lastFinishedProbedKeys = e.runProbedKeys
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
 	// Final flush is synchronous so the last results survive process restart.
@@ -374,6 +376,17 @@ func (e *inspectionEngine) finishedRunOutcome(runID uint64) (listOK bool, listEr
 	return e.lastFinishedListOK, e.lastFinishedListError, e.lastFinishedFullInspect, true
 }
 
+// finishedRunProbedKeys returns the identity keys this finished run actually
+// planned to probe. nil means the run covered every account (full inspect).
+func (e *inspectionEngine) finishedRunProbedKeys(runID uint64) map[string]struct{} {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastFinishedRunID != runID {
+		return nil
+	}
+	return e.lastFinishedProbedKeys
+}
+
 // knownResultKeys builds skip-keys for incremental inspect.
 // Prefer stable auth_index only. Never use email/display name alone (re-import
 // with a new token would incorrectly skip). Without auth_index, fall back to
@@ -400,6 +413,9 @@ func (e *inspectionEngine) commitRunPlanLocked(runID uint64, targets []pluginapi
 	}
 	// Only probe targets are cancellable via immediate stop; missing already written.
 	e.runTargets = append([]pluginapi.HostAuthFileEntry(nil), targets...)
+	if !e.runIsFullInspect {
+		e.runProbedKeys = probedKeySetFromEntries(targets)
+	}
 	e.runModel = model
 	e.runClassifyScoped = classifyScoped
 	e.probePhase = "primary"

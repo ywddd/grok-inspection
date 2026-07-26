@@ -169,6 +169,48 @@ func resolveClassifyTargets(files []pluginapi.HostAuthFileEntry, selected []acco
 	return targets, missing
 }
 
+// probedKeyForIdentity builds the scope key used to tell whether a stored result
+// belongs to a scoped run. auth_index wins; file name is the fallback so rows
+// without auth_index still match their Auth entry.
+func probedKeyForIdentity(authIndex, fileName string) string {
+	if ai := strings.TrimSpace(authIndex); ai != "" {
+		return "ai:" + ai
+	}
+	if fn := strings.ToLower(strings.TrimSpace(fileName)); fn != "" {
+		return "name:" + fn
+	}
+	return ""
+}
+
+// probedKeySetFromEntries collects scope keys for the Auth entries a scoped run
+// planned to probe. Returns nil when no entry carries a usable key, which callers
+// treat as "scope unknown" and therefore skip auto-actions.
+func probedKeySetFromEntries(entries []pluginapi.HostAuthFileEntry) map[string]struct{} {
+	out := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if key := probedKeyForIdentity(entry.AuthIndex, entry.Name); key != "" {
+			out[key] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// resultInProbedScope reports whether a stored result was covered by a scoped run.
+func resultInProbedScope(scope map[string]struct{}, item accountResult) bool {
+	if len(scope) == 0 {
+		return false
+	}
+	if key := probedKeyForIdentity(item.AuthIndex, item.FileName); key != "" {
+		if _, ok := scope[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func stringSet(values []string) map[string]struct{} {
 	out := map[string]struct{}{}
 	for _, value := range values {

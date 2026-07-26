@@ -39,6 +39,10 @@ const (
 	scheduled403Delete  = "delete"
 	scheduled402Disable = "disable"
 	scheduled402Delete  = "delete"
+
+	// Scheduled run scope: full inspects every account, sample probes a subset.
+	scheduleScopeFull   = "full"
+	scheduleScopeSample = "sample"
 )
 
 type persistedInspectionSchedule struct {
@@ -47,6 +51,9 @@ type persistedInspectionSchedule struct {
 	Workers                int    `json:"workers"`
 	IncludeDisabled        bool   `json:"include_disabled"`
 	OnlyDisabled           bool   `json:"only_disabled,omitempty"`
+	Scope                  string `json:"scope,omitempty"`
+	SampleCount            int    `json:"sample_count,omitempty"`
+	SamplePercent          int    `json:"sample_percent,omitempty"`
 	PermissionDeniedAction string `json:"permission_denied_action"`
 	SpendingLimitAction    string `json:"spending_limit_action"`
 	LastRunAt              string `json:"last_run_at,omitempty"`
@@ -72,6 +79,9 @@ type inspectionScheduleUpdate struct {
 	IntervalMinutes        *int    `json:"interval_minutes"`
 	Workers                *int    `json:"workers"`
 	IncludeDisabled        *bool   `json:"include_disabled"`
+	Scope                  *string `json:"scope"`
+	SampleCount            *int    `json:"sample_count"`
+	SamplePercent          *int    `json:"sample_percent"`
 	PermissionDeniedAction *string `json:"permission_denied_action"`
 	SpendingLimitAction    *string `json:"spending_limit_action"`
 }
@@ -95,9 +105,23 @@ func defaultInspectionSchedule() persistedInspectionSchedule {
 	return persistedInspectionSchedule{
 		IntervalMinutes:        defaultInspectionScheduleIntervalMinutes,
 		Workers:                defaultWorkers,
+		Scope:                  scheduleScopeFull,
 		PermissionDeniedAction: scheduled403Disable,
 		SpendingLimitAction:    scheduled402Disable,
 	}
+}
+
+// normalizeScheduleScope keeps unknown or empty scope on the safe full run.
+func normalizeScheduleScope(scope string) (string, error) {
+	scope = strings.ToLower(strings.TrimSpace(scope))
+	if scope == "" {
+		return scheduleScopeFull, nil
+	}
+	switch scope {
+	case scheduleScopeFull, scheduleScopeSample:
+		return scope, nil
+	}
+	return "", fmt.Errorf("scope must be %q or %q", scheduleScopeFull, scheduleScopeSample)
 }
 
 func normalizeInspectionScheduleInterval(minutes int) (int, error) {
@@ -158,6 +182,21 @@ func normalizePersistedInspectionSchedule(cfg persistedInspectionSchedule) persi
 	} else {
 		cfg.SpendingLimitAction = defaults.SpendingLimitAction
 	}
+	if scope, err := normalizeScheduleScope(cfg.Scope); err == nil {
+		cfg.Scope = scope
+	} else {
+		cfg.Scope = defaults.Scope
+	}
+	if cfg.Scope == scheduleScopeSample {
+		// Drop a sample config that can no longer produce a valid run.
+		if _, _, err := normalizeSampleRequest(true, cfg.SampleCount, cfg.SamplePercent, LangZH); err != nil {
+			cfg.Scope = scheduleScopeFull
+		}
+	}
+	if cfg.Scope != scheduleScopeSample {
+		cfg.SampleCount = 0
+		cfg.SamplePercent = 0
+	}
 	if !cfg.Enabled {
 		cfg.NextRunAt = ""
 	}
@@ -181,7 +220,7 @@ func scheduledInspectionRequest(cfg persistedInspectionSchedule) startRequest {
 	if err != nil {
 		workers = defaultWorkers
 	}
-	return startRequest{
+	req := startRequest{
 		Lang:            "zh",
 		Workers:         workers,
 		IncludeDisabled: cfg.IncludeDisabled,
@@ -189,6 +228,16 @@ func scheduledInspectionRequest(cfg persistedInspectionSchedule) startRequest {
 		Incremental:     false,
 		Classifications: nil,
 	}
+	if scope, err := normalizeScheduleScope(cfg.Scope); err == nil && scope == scheduleScopeSample {
+		// Sample params were validated on save; a bad pair here would make the
+		// engine reject the run, so fall back to a full pass instead.
+		if _, _, errSample := normalizeSampleRequest(true, cfg.SampleCount, cfg.SamplePercent, LangZH); errSample == nil {
+			req.Sample = true
+			req.SampleCount = cfg.SampleCount
+			req.SamplePercent = cfg.SamplePercent
+		}
+	}
+	return req
 }
 
 func inspectionScheduleSnapshot() persistedInspectionSchedule {
@@ -227,6 +276,27 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	}
 	if req.IncludeDisabled != nil {
 		cfg.IncludeDisabled = *req.IncludeDisabled
+	}
+	if req.Scope != nil {
+		scope, err := normalizeScheduleScope(*req.Scope)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.Scope = scope
+	}
+	if req.SampleCount != nil {
+		cfg.SampleCount = *req.SampleCount
+	}
+	if req.SamplePercent != nil {
+		cfg.SamplePercent = *req.SamplePercent
+	}
+	if cfg.Scope == scheduleScopeSample {
+		if _, _, err := normalizeSampleRequest(true, cfg.SampleCount, cfg.SamplePercent, LangZH); err != nil {
+			return cfg, err
+		}
+	} else {
+		cfg.SampleCount = 0
+		cfg.SamplePercent = 0
 	}
 	if req.PermissionDeniedAction != nil {
 		action, err := normalizeScheduled403Action(*req.PermissionDeniedAction)
@@ -277,6 +347,9 @@ func inspectionScheduleStatus() map[string]any {
 		"interval_minutes":         cfg.IntervalMinutes,
 		"workers":                  cfg.Workers,
 		"include_disabled":         cfg.IncludeDisabled,
+		"scope":                    cfg.Scope,
+		"sample_count":             cfg.SampleCount,
+		"sample_percent":           cfg.SamplePercent,
 		"permission_denied_action": cfg.PermissionDeniedAction,
 		"spending_limit_action":    cfg.SpendingLimitAction,
 		"last_run_at":              cfg.LastRunAt,
@@ -412,17 +485,23 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 		setInspectionScheduleRuntimeStatus("failed", "inspection run outcome missing or superseded", started, scheduleRunStats{})
 		return
 	}
-	if !fullInspect || !listOK {
+	if !listOK {
 		errMsg := listError
 		if errMsg == "" {
-			if !fullInspect {
-				errMsg = "scheduled auto-actions require a successful full inspection"
-			} else {
-				errMsg = "account list was not obtained for this run"
-			}
+			errMsg = "account list was not obtained for this run"
 		}
 		setInspectionScheduleRuntimeStatus("failed", errMsg, started, scheduleRunStats{})
 		return
+	}
+	// A sample run keeps rows from earlier passes, so auto-actions must stay inside
+	// the accounts this run actually probed. scope nil means "whole account list".
+	var scope map[string]struct{}
+	if !fullInspect {
+		scope = engine.finishedRunProbedKeys(expectedRunID)
+		if len(scope) == 0 {
+			setInspectionScheduleRuntimeStatus("failed", "scheduled run scope is unknown; auto-actions skipped", started, scheduleRunStats{})
+			return
+		}
 	}
 
 	stats := scheduleRunStats{}
@@ -486,13 +565,13 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 	if err != nil {
 		action402 = scheduled402Disable
 	}
-	result403 := runAction(action403, permissionDeniedErrorCode, scheduledPermissionDeniedTargets(action403),
+	result403 := runAction(action403, permissionDeniedErrorCode, scheduledPermissionDeniedTargets(action403, scope),
 		&stats.matched403, &stats.disabled403, &stats.deleted403, &stats.failed403)
 	if result403 == scheduledActionStopped {
 		setInspectionScheduleRuntimeStatus("stopped", strings.Join(stats.errors, "; "), started, stats)
 		return
 	}
-	result402 := runAction(action402, spendingLimitErrorCode, scheduledSpendingLimitTargets(action402),
+	result402 := runAction(action402, spendingLimitErrorCode, scheduledSpendingLimitTargets(action402, scope),
 		&stats.matched402, &stats.disabled402, &stats.deleted402, &stats.failed402)
 	if result402 == scheduledActionStopped {
 		setInspectionScheduleRuntimeStatus("stopped", strings.Join(stats.errors, "; "), started, stats)
@@ -523,28 +602,33 @@ func recordScheduledActionProgress(targets []string, action string, disabled, de
 	}
 }
 
-func scheduledPermissionDeniedTargets(action string) []string {
-	return scheduledTargets(403, "permission_denied", permissionDeniedErrorCode, action)
+func scheduledPermissionDeniedTargets(action string, scope map[string]struct{}) []string {
+	return scheduledTargets(403, "permission_denied", permissionDeniedErrorCode, action, scope)
 }
 
-func scheduledSpendingLimitTargets(action string) []string {
-	return scheduledTargetsExact(402, "spending_limit", spendingLimitErrorCode, action)
+func scheduledSpendingLimitTargets(action string, scope map[string]struct{}) []string {
+	return scheduledTargetsExact(402, "spending_limit", spendingLimitErrorCode, action, scope)
 }
 
-func scheduledTargets(status int, classification, errorCode, action string) []string {
-	return scheduledTargetsMatch(status, classification, errorCode, action, false)
+func scheduledTargets(status int, classification, errorCode, action string, scope map[string]struct{}) []string {
+	return scheduledTargetsMatch(status, classification, errorCode, action, false, scope)
 }
 
-func scheduledTargetsExact(status int, classification, errorCode, action string) []string {
-	return scheduledTargetsMatch(status, classification, errorCode, action, true)
+func scheduledTargetsExact(status int, classification, errorCode, action string, scope map[string]struct{}) []string {
+	return scheduledTargetsMatch(status, classification, errorCode, action, true, scope)
 }
 
-func scheduledTargetsMatch(status int, classification, errorCode, action string, exactCode bool) []string {
+// scope limits matching to accounts probed by the current run. nil scope means
+// the run covered the whole account list.
+func scheduledTargetsMatch(status int, classification, errorCode, action string, exactCode bool, scope map[string]struct{}) []string {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	targets := make([]string, 0)
 	wantCode := strings.ToLower(strings.TrimSpace(errorCode))
 	for _, item := range engine.results {
+		if scope != nil && !resultInProbedScope(scope, item) {
+			continue
+		}
 		code := strings.ToLower(strings.TrimSpace(item.ErrorCode))
 		if item.HTTPStatus != status || item.Classification != classification {
 			continue

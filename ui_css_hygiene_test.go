@@ -221,6 +221,13 @@ func TestUIPreviewMetricAlignment(t *testing.T) {
 		!strings.Contains(css, "flex-wrap:nowrap") {
 		t.Fatal("schedule-controls must use flex-wrap:nowrap for ~1000px single-row layout")
 	}
+	// Status must never be squeezed into a narrow column: it wraps to its own line instead.
+	if !regexp.MustCompile(`\.schedule-row\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap`).MatchString(css) {
+		t.Fatal("schedule-row must be a wrapping flex row so the status can take a full line")
+	}
+	if !regexp.MustCompile(`#scheduleStatus\s*\{[^}]*flex:\s*1\s+1\s+300px`).MatchString(css) {
+		t.Fatal("schedule status needs a non-shrinking flex basis so it wraps instead of turning into a narrow column")
+	}
 	// Mobile may still wrap/grid; ensure 640 keeps grid for schedule-controls.
 	if !strings.Contains(css, "@media (max-width:640px)") || !strings.Contains(css, "schedule-controls") {
 		t.Fatal("mobile schedule layout rules missing")

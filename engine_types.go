@@ -240,12 +240,18 @@ type inspectionEngine struct {
 	runIsFullInspect bool
 	runListOK        bool
 	runListError     string
+	// runProbedKeys is the set of accounts this run planned to probe. Populated
+	// only for scoped runs (sample/category/incremental) so scheduled auto-actions
+	// can skip stale rows kept from earlier runs.
+	runProbedKeys map[string]struct{}
 	// Last finished run outcome (runID-tokenized). Schedule auto-actions must match this.
 	lastFinishedRunID       uint64
 	lastFinishedListOK      bool
 	lastFinishedListError   string
 	lastFinishedFullInspect bool
-	schedule                persistedInspectionSchedule
+	// lastFinishedProbedKeys mirrors runProbedKeys for the last finished run.
+	lastFinishedProbedKeys map[string]struct{}
+	schedule               persistedInspectionSchedule
 }
 
 const maxRecentRowActions = 32

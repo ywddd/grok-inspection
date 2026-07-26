@@ -70,7 +70,7 @@ const uiDocMid = `  </style>
           </div>
         </div>
 
-        <div class="sampling-row sample-controls">
+        <div class="sampling-row sample-controls" id="samplingRow">
           <span class="section-label"><svg class="ico" data-icon="dices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="12" height="12" x="2" y="10" rx="2"/><path d="m17.92 14 3.5-3.5a2.24 2.24 0 0 0 0-3l-5-4.92a2.24 2.24 0 0 0-3 0L10 6"/><path d="M6 18h.01"/><path d="M10 14h.01"/><path d="M15 6h.01"/><path d="M18 9h.01"/></svg><span data-i18n="sample_run">抽检</span></span>
           <div class="sampling-controls">
             <div class="field"><label for="sampleCount" data-i18n="sample_count">抽检数量</label><input id="sampleCount" type="number" min="0" step="1" value="" data-i18n-title="sample_count_title" title="从当前巡检范围随机抽取的账号数量，0 表示不按数量限制"></div>
@@ -81,25 +81,33 @@ const uiDocMid = `  </style>
 
         <div class="schedule-row">
           <span id="scheduleStatus" class="schedule-status">自动巡检状态加载中…</span>
-          <div class="schedule-controls">
-            <label class="check-control"><input id="scheduleEnabled" type="checkbox"><span data-i18n="schedule_enabled">自动巡检</span></label>
-            <div class="field"><label for="scheduleInterval" data-i18n="schedule_interval">间隔（分钟）</label><input id="scheduleInterval" type="number" min="1" max="10080" step="1" value="60"></div>
-            <div class="field"><label for="scheduleWorkers" data-i18n="schedule_workers">并发</label><input id="scheduleWorkers" type="number" min="1" max="16" step="1" value="6"></div>
-            <label class="check-control"><input id="scheduleIncludeDisabled" type="checkbox"><span data-i18n="schedule_include_disabled">包含已禁用</span></label>
-            <div class="field wide"><label for="schedule403Action" data-i18n="schedule_403_action">403 处理</label>
+          <div class="schedule-actions">
+            <div class="schedule-controls">
+              <label class="check-control"><input id="scheduleEnabled" type="checkbox"><span data-i18n="schedule_enabled">自动巡检</span></label>
+              <div class="field"><label for="scheduleInterval" data-i18n="schedule_interval">间隔（分钟）</label><input id="scheduleInterval" type="number" min="1" max="10080" step="1" value="60"></div>
+              <div class="field"><label for="scheduleWorkers" data-i18n="schedule_workers">并发</label><input id="scheduleWorkers" type="number" min="1" max="16" step="1" value="6"></div>
+              <label class="check-control"><input id="scheduleIncludeDisabled" type="checkbox"><span data-i18n="schedule_include_disabled">包含已禁用</span></label>
+              <div class="field wide"><label for="scheduleScope" data-i18n="schedule_scope">巡检范围</label>
+              <select id="scheduleScope" data-i18n-title="schedule_scope_title" title="全量检测所有账号；抽检沿用上方「抽检」行的数量与比例">
+                <option value="full" data-i18n="schedule_scope_full">全量</option>
+                <option value="sample" data-i18n="schedule_scope_sample">抽检</option>
+              </select>
+              </div>
+              <div class="field wide"><label for="schedule403Action" data-i18n="schedule_403_action">403 处理</label>
               <select id="schedule403Action">
                 <option value="disable" data-i18n="schedule_action_disable">禁用</option>
                 <option value="delete" data-i18n="schedule_action_delete">删除</option>
               </select>
-            </div>
-            <div class="field wide"><label for="schedule402Action" data-i18n="schedule_402_action">402 处理</label>
+              </div>
+              <div class="field wide"><label for="schedule402Action" data-i18n="schedule_402_action">402 处理</label>
               <select id="schedule402Action">
                 <option value="disable" data-i18n="schedule_action_disable">禁用</option>
                 <option value="delete" data-i18n="schedule_action_delete">删除</option>
               </select>
+              </div>
             </div>
+            <button id="scheduleSaveBtn" class="btn soft" type="button"><svg class="ico" data-icon="save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg><span data-i18n="schedule_save">保存自动巡检</span></button>
           </div>
-          <button id="scheduleSaveBtn" class="btn soft" type="button"><svg class="ico" data-icon="save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg><span data-i18n="schedule_save">保存自动巡检</span></button>
         </div>
       </div>
     </section>

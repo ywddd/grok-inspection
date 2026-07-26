@@ -144,20 +144,20 @@ const uiCSS = `
           display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0;
         }
         .schedule-controls {
-          display:flex; align-items:center; flex-wrap:nowrap; gap:6px; min-width:0; overflow:hidden;
+          display:flex; align-items:center; flex-wrap:nowrap; gap:6px; min-width:0;
         }
         .schedule-controls .field, .schedule-controls .check-control {
-          flex:0 1 auto; min-width:0; padding:0 8px; gap:6px;
+          flex:0 0 auto; min-width:0; padding:0 8px; gap:6px;
         }
+        /* Labels stay intact; the row wraps instead of clipping longer locales. */
         .schedule-controls .field label, .schedule-controls .check-control span {
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:9.5em;
+          white-space:nowrap;
         }
-        .schedule-controls .field.wide label { max-width:4.5em; }
         .schedule-controls .field input { width:36px; }
         .schedule-controls .field select { max-width:5.5em; }
         .schedule-row > .btn, .schedule-row #scheduleSaveBtn { flex:0 0 auto; white-space:nowrap; }
         .schedule-status, #scheduleStatus {
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:12em;
+          white-space:normal; overflow-wrap:anywhere;
         }
         .field, .check-control {
           min-height:34px; display:inline-flex; align-items:center; gap:8px; padding:0 10px;
@@ -205,13 +205,18 @@ const uiCSS = `
         .section-label {
           display:inline-flex; align-items:center; gap:7px; color:#475569; font-size:12px; font-weight:720; white-space:nowrap;
         }
+        /* Marks the toolbar sample inputs that the scheduled sample run reuses. */
+        .sampling-row.schedule-linked { box-shadow:inset 3px 0 0 var(--primary); }
+        .sampling-row.schedule-linked .section-label { color:var(--primary); }
+        /* Status shares the row while it fits, then wraps to its own full-width line. */
         .schedule-row {
-          display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px;
+          display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px;
           padding:10px 12px; border-top:1px solid var(--line); min-width:0;
         }
+        .schedule-actions { display:flex; align-items:center; flex-wrap:nowrap; gap:8px; min-width:0; }
         .schedule-status, #scheduleStatus {
           display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; font-weight:650;
-          min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:11em;
+          flex:1 1 300px; min-width:min(300px, 100%); white-space:normal; overflow-wrap:anywhere; line-height:1.45;
         }
         .status-dot { width:7px; height:7px; border-radius:50%; background:#cbd5e1; flex:0 0 auto; }
 
@@ -440,24 +445,20 @@ const uiCSS = `
           .toolbar-actions { justify-content:flex-start; }
         }
         @media (max-width:1180px) and (min-width:901px) {
-          .schedule-row { gap:6px; }
-          .schedule-controls { gap:4px; }
+          .schedule-row { gap:6px 8px; }
+          .schedule-controls { flex-wrap:wrap; gap:4px; }
           .schedule-controls .field, .schedule-controls .check-control { padding:0 6px; gap:4px; }
-          .schedule-controls .field label, .schedule-controls .check-control span { max-width:7.5em; }
-          .schedule-controls .field.wide label { max-width:3.5em; }
-          .schedule-status, #scheduleStatus { max-width:9em; }
         }
         @media (max-width:900px) {
           .grok-inspection-page { width:min(100% - 24px, 1480px); padding-top:12px; }
           .help-popover { top:40px; left:0; right:auto; }
           .summary, .overview.inspection-summary { grid-template-columns:repeat(3, minmax(0, 1fr)); }
           .summary.ban-summary, .overview.autoban-summary, .autoban-summary { grid-template-columns:repeat(3, minmax(0, 1fr)); }
-          .schedule-row { grid-template-columns:1fr auto; gap:8px; }
-          .schedule-controls {
-            grid-column:1 / -1; flex-wrap:wrap; overflow:visible; gap:6px;
-          }
+          .schedule-row { gap:8px; }
+          .schedule-actions { flex:1 1 100%; flex-wrap:wrap; }
+          .schedule-controls { flex-wrap:wrap; overflow:visible; gap:6px; }
           .schedule-controls .field label, .schedule-controls .check-control span { max-width:none; }
-          .schedule-status, #scheduleStatus { max-width:none; }
+          .schedule-status, #scheduleStatus { flex:1 1 100%; min-width:0; max-width:none; }
         }
         @media (max-width:760px) {
           body { overflow-x:hidden !important; }
@@ -512,10 +513,13 @@ const uiCSS = `
           .sampling-controls { display:grid; grid-template-columns:1fr 1fr; margin-top:8px; }
           .sampling-controls .field { width:100%; min-width:0; }
           .sampling-controls .btn, .sampling-controls #sampleBtn { grid-column:1 / -1; width:100%; }
-          .schedule-row { display:grid; grid-template-columns:1fr auto; padding:10px; }
-          .schedule-controls { grid-column:1 / -1; display:grid; grid-template-columns:1fr 1fr; flex-wrap:wrap; overflow:visible; }
+          .schedule-row { padding:10px; }
+          .schedule-actions { flex:1 1 100%; display:block; }
+          .schedule-controls { display:grid; grid-template-columns:1fr 1fr; flex-wrap:wrap; overflow:visible; }
           .schedule-controls .field, .schedule-controls .check-control { min-width:0; width:100%; }
-          .schedule-controls .wide { grid-column:1 / -1; }
+          .schedule-controls .field select { max-width:none; width:100%; }
+          .schedule-controls .check-control span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+          .schedule-actions #scheduleSaveBtn { width:100%; margin-top:8px; }
           .summary, .overview.inspection-summary, .summary.ban-summary, .overview.autoban-summary, .autoban-summary {
             grid-template-columns:repeat(2, minmax(0, 1fr)) !important; gap:7px;
           }

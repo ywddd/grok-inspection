@@ -151,7 +151,7 @@ func TestScheduledPermissionDeniedTargetsRequireExplicit403Code(t *testing.T) {
 		engine.mu.Unlock()
 	})
 
-	got := scheduledPermissionDeniedTargets(scheduled403Disable)
+	got := scheduledPermissionDeniedTargets(scheduled403Disable, nil)
 	if len(got) != 1 || got[0] != "exact" {
 		t.Fatalf("targets=%v want [exact]", got)
 	}
@@ -173,7 +173,7 @@ func TestScheduledSpendingLimitTargetsRequireExplicit402Code(t *testing.T) {
 		engine.mu.Unlock()
 	})
 
-	got := scheduledSpendingLimitTargets(scheduled402Disable)
+	got := scheduledSpendingLimitTargets(scheduled402Disable, nil)
 	if len(got) != 1 || got[0] != "exact" {
 		t.Fatalf("targets=%v want [exact]", got)
 	}
@@ -273,7 +273,7 @@ func TestScheduledSpendingLimitTargetsRequireExactCode(t *testing.T) {
 		engine.mu.Unlock()
 	})
 
-	got := scheduledSpendingLimitTargets(scheduled402Disable)
+	got := scheduledSpendingLimitTargets(scheduled402Disable, nil)
 	if len(got) != 1 || got[0] != "exact" {
 		t.Fatalf("targets=%v want [exact]", got)
 	}

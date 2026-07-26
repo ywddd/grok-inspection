@@ -370,14 +370,22 @@ func resolveManagementBaseURL(headers http.Header) string {
 	if value, ok := configuredManagementBaseURL(); ok {
 		return value
 	}
+	hostCfg, hostCfgOK := hostConfigListen()
 	scheme := "http"
-	if managementTLSPreferred() {
+	if managementTLSPreferred() || (hostCfgOK && hostCfg.tls) {
 		scheme = "https"
 	}
 	// PORT then CPA_PORT, each validated independently. A garbage PORT must not
 	// shadow a valid CPA_PORT (firstNonEmpty alone is not enough).
 	if port := firstValidEnvTCPPort("PORT", "CPA_PORT"); port != "" {
 		return scheme + "://127.0.0.1:" + port
+	}
+	// CPA's own config.yaml is authoritative for the in-process listen port
+	// (issues #24/#25): request Host/Origin may carry an external mapped port
+	// (Docker -p / panel proxy) that CPA never listens on locally, and headless
+	// autoban/schedule workers have no headers at all on cold start.
+	if hostCfgOK && hostCfg.port != "" {
+		return scheme + "://127.0.0.1:" + hostCfg.port
 	}
 	// No explicit management URL / PORT: derive ONLY a port from the request
 	// (Host if CPA injected it, else Origin) and always dial loopback.

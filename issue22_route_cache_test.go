@@ -24,6 +24,9 @@ func withIsolatedManagementEnv(t *testing.T) {
 	oldDo := getCPAManagementDo()
 	clearDerivedManagementPortCacheForTest()
 	clearManagementCredentialCacheForTest()
+	// Tests exercise Host/Origin derivation; pin "no host config.yaml found"
+	// so a stray config.yaml in the test CWD cannot leak into assertions.
+	setHostListenConfigForTest(hostListenConfig{}, false)
 	t.Cleanup(func() {
 		_ = os.Setenv("CPA_BASE_URL", oldBase)
 		_ = os.Setenv("CPA_MANAGEMENT_BASE_URL", oldMgmt)
@@ -33,6 +36,7 @@ func withIsolatedManagementEnv(t *testing.T) {
 		setCPAManagementDo(oldDo)
 		clearDerivedManagementPortCacheForTest()
 		clearManagementCredentialCacheForTest()
+		resetHostListenCacheForTest()
 	})
 	_ = os.Unsetenv("CPA_BASE_URL")
 	_ = os.Unsetenv("CPA_MANAGEMENT_BASE_URL")

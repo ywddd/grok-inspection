@@ -106,3 +106,19 @@ func clearDerivedManagementPortCacheForTest() {
 	derivedManagementPortCache.port = ""
 	derivedManagementPortCache.mu.Unlock()
 }
+
+func setHostListenConfigForTest(cfg hostListenConfig, ok bool) {
+	hostListenCache.mu.Lock()
+	hostListenCache.cfg = cfg
+	hostListenCache.ok = ok
+	hostListenCache.loaded = true
+	hostListenCache.mu.Unlock()
+}
+
+func resetHostListenCacheForTest() {
+	hostListenCache.mu.Lock()
+	hostListenCache.cfg = hostListenConfig{}
+	hostListenCache.ok = false
+	hostListenCache.loaded = false
+	hostListenCache.mu.Unlock()
+}

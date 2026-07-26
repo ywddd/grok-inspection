@@ -24,7 +24,9 @@ Chinese documentation remains in [README.md](README.md).
 ## Features
 
 - Full, incremental, and classification-scoped inspection for Grok/xAI accounts
-- Scheduled inspection with configurable interval, concurrency, disabled-account inclusion, and disable/delete actions for 402/403 results
+- Sampling: probe a random subset by count or percentage while keeping existing results for unsampled accounts
+- Scheduled inspection with configurable interval, concurrency, scope (full or sample), disabled-account inclusion, and disable/delete actions for 402/403 results
+- Scheduled sample runs reuse the toolbar sample count and percentage, and automatic actions only apply to accounts probed in that run
 - Detects healthy, 402 spending/subscription limit, permission denied, free-usage exhausted, reauth required, model unavailable, and probe errors
 - Background inspection and bulk actions continue if you leave the page
 - One-click suggested actions, bulk disable/delete, and single-account actions

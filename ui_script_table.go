@@ -203,6 +203,9 @@ const uiScriptTable = `  function filtered() {
       $('sampleBtn').disabled = !hasManagementKey() || busy;
     }
     $('stopBtn').disabled = !hasManagementKey() || !(snap.running || snap.applying || (snap.unban && snap.unban.running));
+    const banStop = document.getElementById('banStopBtn');
+    if (banStop) banStop.disabled = !hasManagementKey() || !(snap.unban && snap.unban.running);
+    if (typeof syncBanActionButtons === 'function') syncBanActionButtons(snap);
     $('applyBtn').disabled = !hasManagementKey() || busy || actionCount === 0;
     $('batchExportBtn').disabled = filteredCount === 0;
     $('batchDisableBtn').disabled = !hasManagementKey() || busy || disableCount === 0;
@@ -226,8 +229,15 @@ const uiScriptTable = `  function filtered() {
     if (!hasManagementKey()) {
       setProgress(t('need_key_load'), false);
     } else if (snap.unban && snap.unban.running) {
-      let msg = t('unban_running') + (snap.unban.done||0) + '/' + (snap.unban.total||0) + (snap.unban.current ? ' · ' + snap.unban.current : '');
-      if ((snap.unban.failures || []).length) msg += t('unban_fail_sep') + snap.unban.failures.length; if (snap.unban.persist_error) msg += t('unban_persist_sep') + snap.unban.persist_error;
+      const delMode = String((snap.unban && snap.unban.mode) || '') === 'delete';
+      const runKey = delMode ? 'delete_running' : 'unban_running';
+      const failKey = delMode ? 'delete_fail_sep' : 'unban_fail_sep';
+      const persistKey = delMode ? 'delete_persist_sep' : 'unban_persist_sep';
+      let msg = t(runKey) + (snap.unban.done||0) + '/' + (snap.unban.total||0);
+      if (delMode && snap.unban.deleted != null) msg += t('delete_deleted_sep') + (snap.unban.deleted||0);
+      if (snap.unban.current) msg += ' · ' + snap.unban.current;
+      if ((snap.unban.failures || []).length) msg += t(failKey) + snap.unban.failures.length;
+      if (snap.unban.persist_error) msg += t(persistKey) + snap.unban.persist_error;
       setProgress(msg, true);
     } else if (snap.applying) {
       let msg = t('apply_progress') + (snap.apply_done||0) + '/' + (snap.apply_total||0) + (snap.apply_current ? t('apply_progress_sep') + snap.apply_current : '');
@@ -270,10 +280,12 @@ const uiScriptTable = `  function filtered() {
       completedErrors.push(...(snap.apply_failures || []).map(localizeKnownActionError));
     }
     if (snap.unban && !snap.unban.running) {
+      const delMode = String((snap.unban && snap.unban.mode) || '') === 'delete';
       if ((snap.unban.failures || []).length) {
         completedErrors.push(...(snap.unban.failures || []).map(localizeKnownActionError));
       } else if (snap.unban.persist_error) {
-        completedErrors.push(t('unban_progress_complete_fail') + localizeKnownActionError(snap.unban.persist_error));
+        const failKey = delMode ? 'delete_progress_complete_fail' : 'unban_progress_complete_fail';
+        completedErrors.push(t(failKey) + localizeKnownActionError(snap.unban.persist_error));
       }
     }
     if (completedErrors.length) {

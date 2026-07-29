@@ -180,21 +180,48 @@ const uiScriptBan = `  function heroTextFor(tab) {
     if (f === 'all') return list;
     return list.filter((b) => banCategoryOf(b) === f);
   }
-  function syncBanFilterUI() {
+  function banJobRunning(snap) {
+    const s = snap || (state && state.snapshot) || {};
+    return !!(s.unban && s.unban.running);
+  }
+  function syncBanActionButtons(snap) {
+    const hasKey = (typeof hasManagementKey === 'function') ? hasManagementKey() : true;
+    const busy = banJobRunning(snap);
     const f = banState.filter || 'all';
-    document.querySelectorAll('[data-ban-filter]').forEach((card) => {
-      card.classList.toggle('active', card.getAttribute('data-ban-filter') === f);
-    });
     const filtered = filteredBans();
+    const n = filtered.length;
+    const poolN = (Array.isArray(banState.bans) ? banState.bans : []).length;
     const btn = document.getElementById('banUnbanFilterBtn');
     if (btn) {
-      const n = filtered.length;
-      btn.disabled = n === 0;
+      btn.disabled = !hasKey || busy || n === 0;
       const unbanLabel = f === 'all'
         ? (t('ban_unban_filter') + (n ? ' (' + n + ')' : ''))
         : (t('ban_unban_filter_named_prefix') + banFilterLabel(f) + t('ban_unban_filter_named_suffix') + (n ? ' (' + n + ')' : ''));
       if (typeof setBtnLabel === 'function') setBtnLabel(btn, unbanLabel); else btn.textContent = unbanLabel;
     }
+    const delBtn = document.getElementById('banDeleteFilterBtn');
+    if (delBtn) {
+      delBtn.disabled = !hasKey || busy || n === 0;
+      const delLabel = f === 'all'
+        ? (t('ban_delete_filter') + (n ? ' (' + n + ')' : ''))
+        : (t('ban_delete_filter_named_prefix') + banFilterLabel(f) + t('ban_delete_filter_named_suffix') + (n ? ' (' + n + ')' : ''));
+      if (typeof setBtnLabel === 'function') setBtnLabel(delBtn, delLabel); else delBtn.textContent = delLabel;
+    }
+    const unbanAllBtn = document.getElementById('banUnbanAllBtn');
+    if (unbanAllBtn) unbanAllBtn.disabled = !hasKey || busy || poolN === 0;
+    const delAllBtn = document.getElementById('banDeleteAllBtn');
+    if (delAllBtn) delAllBtn.disabled = !hasKey || busy || poolN === 0;
+    const banStop = document.getElementById('banStopBtn');
+    if (banStop) banStop.disabled = !hasKey || !busy;
+  }
+  function syncBanFilterUI() {
+
+    const f = banState.filter || 'all';
+    document.querySelectorAll('[data-ban-filter]').forEach((card) => {
+      card.classList.toggle('active', card.getAttribute('data-ban-filter') === f);
+    });
+    const filtered = filteredBans();
+    syncBanActionButtons(state && state.snapshot ? state.snapshot : null);
     const hint = document.getElementById('banFilterHint');
     const poolCtx = document.getElementById('banPoolContext');
     const filterText = f === 'all'
@@ -377,7 +404,7 @@ async function loadBans() {
     }
   }
     async function unbanCurrentFilter() {
-    if (unbanCurrentFilter._busy) return;
+    if (unbanCurrentFilter._busy || banJobRunning()) return;
     unbanCurrentFilter._busy = true;
     const errEl = document.getElementById('banError');
     if (errEl) errEl.textContent = '';
@@ -414,6 +441,12 @@ async function loadBans() {
     }
   }
   async function unbanAll() {
+    if (banJobRunning()) return;
+    const poolN = (Array.isArray(banState.bans) ? banState.bans : []).length;
+    if (!poolN) {
+      await confirmDialog(t('notice_title'), t('unban_filter_empty'), { showCancel: false });
+      return;
+    }
     const ok = await confirmDialog(t('unban_all_confirm_title'), t('unban_all_confirm_body'));
     if (!ok) return;
     try {
@@ -425,6 +458,91 @@ async function loadBans() {
       await loadBans();
     } catch (e) {
       await confirmDialog(t('notice_title'), String(e.message || e));
+    }
+  }
+  async function deleteCurrentFilter() {
+    if (deleteCurrentFilter._busy || banJobRunning()) return;
+    deleteCurrentFilter._busy = true;
+    const errEl = document.getElementById('banError');
+    if (errEl) errEl.textContent = '';
+    const btn = document.getElementById('banDeleteFilterBtn');
+    try {
+      if (typeof hasManagementKey === 'function' && !hasManagementKey()) {
+        await confirmDialog(t('notice_title'), t('ban_need_key_load'), { showCancel: false });
+        return;
+      }
+      const list = filteredBans();
+      if (!list.length) {
+        await confirmDialog(t('notice_title'), t('delete_filter_empty'), { showCancel: false });
+        return;
+      }
+      const label = banFilterLabel(banState.filter || 'all');
+      const ok = await confirmDialog(
+        t('delete_filter_confirm_title'),
+        t('delete_filter_confirm_body_prefix') + label + t('delete_filter_confirm_body_mid') + list.length + t('delete_filter_confirm_body_suffix')
+      );
+      if (!ok) return;
+      if (btn) { btn.disabled = true; if (typeof setBtnLabel === 'function') setBtnLabel(btn, t('delete_in_progress')); else btn.textContent = t('delete_in_progress'); }
+      const ids = list.map((b) => String(b.auth_id || '').trim()).filter(Boolean);
+      const body = (banState.filter && banState.filter !== 'all')
+        ? { category: banState.filter, auth_ids: ids }
+        : { auth_ids: ids };
+      const data = await api('/ban-delete', { method: 'POST', body: JSON.stringify(body) });
+      if (data && data.ok === false) throw new Error(data.error || t('delete_start_failed'));
+      showOk(t('delete_filter_started_prefix') + ids.length + t('delete_filter_started_suffix'));
+      startPolling();
+      await refresh({ light: true });
+      await loadBans();
+    } catch (e) {
+      try { await confirmDialog(t('delete_failed'), String(e.message || e), { showCancel: false }); } catch (_) {}
+      if (errEl) errEl.textContent = String(e.message || e);
+    } finally {
+      deleteCurrentFilter._busy = false;
+      syncBanFilterUI();
+    }
+  }
+  async function deleteAllBanned() {
+    if (deleteAllBanned._busy) return;
+    deleteAllBanned._busy = true;
+    try {
+      if (typeof hasManagementKey === 'function' && !hasManagementKey()) {
+        await confirmDialog(t('notice_title'), t('ban_need_key_load'), { showCancel: false });
+        return;
+      }
+      if (banJobRunning()) {
+        await confirmDialog(t('notice_title'), t('delete_start_failed'), { showCancel: false });
+        return;
+      }
+      const n = (Array.isArray(banState.bans) ? banState.bans : []).length;
+      if (!n) {
+        await confirmDialog(t('notice_title'), t('delete_filter_empty'), { showCancel: false });
+        return;
+      }
+      const ok = await confirmDialog(
+        t('delete_all_confirm_title'),
+        t('delete_all_confirm_body_prefix') + n + t('delete_all_confirm_body_suffix')
+      );
+      if (!ok) return;
+      const data = await api('/ban-delete', { method: 'POST', body: JSON.stringify({ category: 'all' }) });
+      if (data && data.ok === false) throw new Error(data.error || t('delete_start_failed'));
+      showOk(t('delete_all_started'));
+      startPolling();
+      await refresh({ light: true });
+      await loadBans();
+    } catch (e) {
+      await confirmDialog(t('notice_title'), String(e.message || e));
+    } finally {
+      deleteAllBanned._busy = false;
+      syncBanActionButtons(state && state.snapshot ? state.snapshot : null);
+    }
+  }
+  async function stopBanJob() {
+    try {
+      await api('/stop', { method: 'POST', body: JSON.stringify({ lang: lang }) });
+      await refresh({ light: true });
+    } catch (e) {
+      const errEl = document.getElementById('banError');
+      if (errEl) errEl.textContent = String(e.message || e);
     }
   }
 async function setAutobanEnabled(on) {
@@ -460,6 +578,12 @@ async function setAutobanEnabled(on) {
   if (banUnbanFilterBtn) banUnbanFilterBtn.onclick = () => unbanCurrentFilter();
   const banUnbanAllBtn = document.getElementById('banUnbanAllBtn');
   if (banUnbanAllBtn) banUnbanAllBtn.onclick = () => unbanAll();
+  const banDeleteFilterBtn = document.getElementById('banDeleteFilterBtn');
+  if (banDeleteFilterBtn) banDeleteFilterBtn.onclick = () => deleteCurrentFilter();
+  const banDeleteAllBtn = document.getElementById('banDeleteAllBtn');
+  if (banDeleteAllBtn) banDeleteAllBtn.onclick = () => deleteAllBanned();
+  const banStopBtn = document.getElementById('banStopBtn');
+  if (banStopBtn) banStopBtn.onclick = () => stopBanJob();
   document.querySelectorAll('[data-ban-filter]').forEach((card) => {
     card.addEventListener('click', () => setBanFilter(card.getAttribute('data-ban-filter') || 'all'));
   });

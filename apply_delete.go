@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"grok-inspection/cpasdk/pluginapi"
@@ -104,7 +105,15 @@ func resolveDeleteFileName(item accountResult) string {
 // deleteAuthFilesBatch deletes many auth files in one CPA Management API call.
 // Host supports: DELETE /v0/management/auth-files with body {"names":[...]} or multi ?name=.
 // Returns per-item failure messages (empty means all ok).
+// Successful names clear local results/bans when the remote outcome is known.
 func deleteAuthFilesBatch(items []accountResult, password string, headers http.Header, persist bool) []string {
+	return deleteAuthFilesBatchWithClear(items, password, headers, persist, true)
+}
+
+// deleteAuthFilesBatchWithClear is deleteAuthFilesBatch with optional local clear.
+// clearLocal=false is for callers that apply fail-closed accounting and only clear
+// rows they can positively confirm succeeded.
+func deleteAuthFilesBatchWithClear(items []accountResult, password string, headers http.Header, persist bool, clearLocal bool) []string {
 	if len(items) == 0 {
 		return nil
 	}
@@ -154,12 +163,14 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		msg := errDelete.Error()
 		// Already gone: treat as success and clear local. Other errors keep local state.
 		if strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found") {
-			for _, m := range mappedItems {
-				clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false)
-			}
-			if persist {
-				engine.persist()
-				_ = saveActiveStoreErr()
+			if clearLocal {
+				for _, m := range mappedItems {
+					clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false)
+				}
+				if persist {
+					engine.persist()
+					_ = saveActiveStoreErr()
+				}
 			}
 			return failures
 		}
@@ -169,39 +180,39 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 		return failures
 	}
 
+	// 207 Multi-Status is fail-closed at the batch layer: only clear per-item when
+	// every failure row can be parsed and attributed to a requested name. Ordinary
+	// 200 responses stay lenient (including {status:ok} with empty/malformed extras).
 	failedNames := map[string]string{}
-	if status == http.StatusMultiStatus || len(raw) > 0 {
-		var payload struct {
-			Status string `json:"status"`
-			Failed []struct {
-				Name  string `json:"name"`
-				Error string `json:"error"`
-			} `json:"failed"`
-			Files []string `json:"files"`
-		}
-		if err := json.Unmarshal(raw, &payload); err == nil {
-			for _, f := range payload.Failed {
-				name := strings.TrimSpace(f.Name)
-				if name == "" {
-					continue
-				}
-				errText := strings.TrimSpace(f.Error)
-				if errText == "" {
-					errText = "delete failed"
-				}
-				failedNames[name] = errText
+	if status == http.StatusMultiStatus {
+		parsed, batchErr := parseAuthDeleteMultiStatusFailures(raw, seenName)
+		if batchErr != nil {
+			for _, m := range mappedItems {
+				label := firstNonEmpty(m.item.Name, m.fileName, m.item.AuthIndex)
+				failures = append(failures, label+": "+batchErr.Error())
 			}
+			// Keep local state for the whole batch; do not clear on unusable 207.
+			return failures
+		}
+		failedNames = parsed
+	} else if len(raw) > 0 {
+		// Non-207 bodies may still carry a partial failed[] list (legacy hosts).
+		if parsed, err := parseAuthDeleteFailedMapLenient(raw); err == nil {
+			failedNames = parsed
 		}
 	}
 
 	anyCleared := false
 	for _, m := range mappedItems {
 		if errText, ok := failedNames[m.fileName]; ok {
-			failures = append(failures, m.item.Name+": "+errText)
+			label := firstNonEmpty(m.item.Name, m.fileName, m.item.AuthIndex)
+			failures = append(failures, label+": "+errText)
 			continue
 		}
-		if clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false) {
-			anyCleared = true
+		if clearLocal {
+			if clearOneDeletedAuthLocal(m.item, m.fileName, dupAliases[m.fileName], false) {
+				anyCleared = true
+			}
 		}
 	}
 	if persist {
@@ -210,8 +221,85 @@ func deleteAuthFilesBatch(items []accountResult, password string, headers http.H
 			_ = saveActiveStoreErr()
 		}
 	}
-	_ = status
 	return failures
+}
+
+type authDeleteMultiFailed struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+type authDeleteMultiPayload struct {
+	Status string                  `json:"status"`
+	Failed []authDeleteMultiFailed `json:"failed"`
+	Files  []string                `json:"files"`
+}
+
+// parseAuthDeleteMultiStatusFailures parses a 207 body. requested must contain
+// every physical name sent in this DELETE. The body must be a known multi-status
+// schema: JSON object with an explicit "failed" array (empty array = no failures).
+// Missing/null/non-array failed, empty/unknown failure names, or malformed JSON
+// make the whole multi-status unusable (caller fail-closes, keeps local state).
+func parseAuthDeleteMultiStatusFailures(raw []byte, requested map[string]struct{}) (map[string]string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("multi-status delete response missing body")
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, fmt.Errorf("multi-status delete response unusable: %v", err)
+	}
+	failedRaw, ok := top["failed"]
+	if !ok {
+		return nil, fmt.Errorf("multi-status delete response missing failed array")
+	}
+	trimFailed := bytes.TrimSpace(failedRaw)
+	if len(trimFailed) == 0 || bytes.Equal(trimFailed, []byte("null")) {
+		return nil, fmt.Errorf("multi-status delete response failed is null")
+	}
+	var failedList []authDeleteMultiFailed
+	if err := json.Unmarshal(failedRaw, &failedList); err != nil {
+		return nil, fmt.Errorf("multi-status delete response failed is not an array")
+	}
+	// empty failed array is valid: no per-name failures.
+	failedNames := map[string]string{}
+	for _, f := range failedList {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			return nil, fmt.Errorf("multi-status delete failure missing name")
+		}
+		if _, ok := requested[name]; !ok {
+			return nil, fmt.Errorf("multi-status delete failure for unknown name %q", name)
+		}
+		errText := strings.TrimSpace(f.Error)
+		if errText == "" {
+			errText = "delete failed"
+		}
+		failedNames[name] = errText
+	}
+	return failedNames, nil
+}
+
+// parseAuthDeleteFailedMapLenient extracts failed[] from non-207 bodies without
+// failing the whole batch on parse issues (preserves historical 200 behavior).
+func parseAuthDeleteFailedMapLenient(raw []byte) (map[string]string, error) {
+	var payload authDeleteMultiPayload
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	failedNames := map[string]string{}
+	for _, f := range payload.Failed {
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			continue
+		}
+		errText := strings.TrimSpace(f.Error)
+		if errText == "" {
+			errText = "delete failed"
+		}
+		failedNames[name] = errText
+	}
+	return failedNames, nil
 }
 
 // clearOneDeletedAuthLocal removes local results/bans for one successfully deleted

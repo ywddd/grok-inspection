@@ -184,15 +184,19 @@ func classifyProbe(input classifyInput) classifyResult {
 		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
 	}
 
-	// Auth expiry. HTTP 401 always reauth. Text-based unauthorized must not apply on 403
-	// (account permission / WAF handled below).
-	if status == http.StatusUnauthorized || (status != http.StatusForbidden && containsAny(blob,
-		"token is expired",
-		"token has been invalidated",
-		"invalid_grant",
-		"unauthorized",
-	)) {
-		return classifyResult{Classification: "reauth", Action: "delete", Reason: T(input.Lang, "auth_expired")}
+	// Auth expiry / invalid credentials: only HTTP 401 with strong credential evidence.
+	// Bare 401 "Authentication required" is probe_error (proxy noise before free-usage 429).
+	// Never promote non-401 transport/upstream text (e.g. "refresh token" in 500) to reauth.
+	if status == http.StatusUnauthorized {
+		if isStrongUnauthorizedEvidence(input.ChatCode, input.ChatError) {
+			return classifyResult{Classification: "reauth", Action: "delete", Reason: T(input.Lang, "auth_expired")}
+		}
+		reason := strings.TrimSpace(firstNonEmpty(input.ChatError, input.ChatCode, T(input.Lang, "probe_failed")))
+		if reason == "" {
+			reason = T(input.Lang, "probe_failed")
+		}
+		reason = fmt.Sprintf("%s (HTTP %d)", reason, status)
+		return classifyResult{Classification: "probe_error", Action: "keep", Reason: reason}
 	}
 	// Only Grok free-usage exhaustion (not bare 429 / generic rate limit).
 	if isFreeUsageExhausted(input.ChatCode, input.ChatError) {

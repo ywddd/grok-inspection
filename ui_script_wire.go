@@ -23,7 +23,17 @@ const uiScriptWire = `  function wireExclusive() {
       savePrefs({ includeDisabled: include.checked, onlyDisabled: only.checked });
     };
   }
-  ['scheduleEnabled', 'scheduleInterval', 'scheduleWorkers', 'scheduleIncludeDisabled', 'scheduleScope', 'schedule403Action', 'schedule402Action'].forEach((id) => {
+  const scheduleInclude = $('scheduleIncludeDisabled');
+  const scheduleOnly = $('scheduleOnlyDisabled');
+  if (scheduleInclude) scheduleInclude.onchange = () => {
+    if (scheduleInclude.checked) scheduleOnly.checked = false;
+    scheduleDirty = true;
+  };
+  if (scheduleOnly) scheduleOnly.onchange = () => {
+    if (scheduleOnly.checked) scheduleInclude.checked = false;
+    scheduleDirty = true;
+  };
+  ['scheduleEnabled', 'scheduleInterval', 'scheduleWorkers', 'scheduleIncludeDisabled', 'scheduleOnlyDisabled', 'scheduleScope', 'schedule403Action', 'schedule402Action', 'scheduleAutoRecoverHealthy'].forEach((id) => {
     const el = $(id);
     if (el) el.addEventListener('input', () => { scheduleDirty = true; });
     if (el) el.addEventListener('change', () => { scheduleDirty = true; });

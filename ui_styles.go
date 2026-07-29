@@ -144,7 +144,7 @@ const uiCSS = `
           display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0;
         }
         .schedule-controls {
-          display:flex; align-items:center; flex-wrap:nowrap; gap:6px; min-width:0;
+          display:flex; align-items:center; flex:1 1 0; flex-wrap:wrap; gap:6px; min-width:0; overflow:visible;
         }
         .schedule-controls .field, .schedule-controls .check-control {
           flex:0 0 auto; min-width:0; padding:0 8px; gap:6px;
@@ -213,7 +213,7 @@ const uiCSS = `
           display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px;
           padding:10px 12px; border-top:1px solid var(--line); min-width:0;
         }
-        .schedule-actions { display:flex; align-items:center; flex-wrap:nowrap; gap:8px; min-width:0; }
+        .schedule-actions { display:flex; align-items:center; flex-wrap:wrap; gap:8px; min-width:0; overflow:visible; }
         .schedule-status, #scheduleStatus {
           display:inline-flex; align-items:center; gap:6px; color:var(--muted); font-size:12px; font-weight:650;
           flex:1 1 300px; min-width:min(300px, 100%); white-space:normal; overflow-wrap:anywhere; line-height:1.45;
@@ -499,10 +499,15 @@ const uiCSS = `
           .mode-tabs, .grok-inspection-page .tabs {
             display:grid !important; grid-template-columns:1fr 1fr !important; width:100%; max-width:100%; gap:4px; padding:8px 8px 0;
           }
-          .tab, .mode-tab { width:100%; min-width:0; max-width:100%; padding:8px; align-items:center; }
+          .tab, .mode-tab { width:100%; min-width:0; max-width:100%; padding:8px 6px; align-items:center; }
           .tab > span, .mode-tab > span { min-width:0; overflow:hidden; }
-          .tab svg, .mode-tab svg { margin-top:0; }
-          .tab .tab-title, .mode-tab .tab-title, .tab .tab-desc, .mode-tab .tab-desc, .tab small, .mode-tab small {
+          .tab svg, .mode-tab svg { margin-top:0; flex:0 0 auto; }
+          /* Main tab titles must remain fully readable in English at ~390px; desc may ellipsize. */
+          .tab .tab-title, .mode-tab .tab-title {
+            overflow:visible; white-space:normal; text-overflow:clip; max-width:100%;
+            font-size:12px; line-height:16px; overflow-wrap:anywhere; word-break:normal;
+          }
+          .tab .tab-desc, .mode-tab .tab-desc, .tab small, .mode-tab small {
             overflow:hidden; white-space:nowrap; text-overflow:ellipsis; max-width:100%;
           }
           .toolbar { grid-template-columns:1fr; padding:10px; }
@@ -518,7 +523,17 @@ const uiCSS = `
           .schedule-controls { display:grid; grid-template-columns:1fr 1fr; flex-wrap:wrap; overflow:visible; }
           .schedule-controls .field, .schedule-controls .check-control { min-width:0; width:100%; }
           .schedule-controls .field select { max-width:none; width:100%; }
-          .schedule-controls .check-control span { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+          /* Long English schedule toggles: full-row + natural text (desktop/Chinese unchanged). */
+          .schedule-controls > .check-control:has(#scheduleEnabled),
+          .schedule-controls > .check-control:has(#scheduleAutoRecoverHealthy) {
+            grid-column:1 / -1; width:100%; max-width:none; align-items:flex-start;
+          }
+          .schedule-controls > .check-control:has(#scheduleEnabled) span,
+          .schedule-controls > .check-control:has(#scheduleAutoRecoverHealthy) span {
+            min-width:0; max-width:none; overflow:visible; white-space:normal;
+            text-overflow:clip; overflow-wrap:anywhere; line-height:1.35;
+          }
+          .schedule-controls .check-control span { min-width:0; }
           .schedule-actions #scheduleSaveBtn { width:100%; margin-top:8px; }
           .summary, .overview.inspection-summary, .summary.ban-summary, .overview.autoban-summary, .autoban-summary {
             grid-template-columns:repeat(2, minmax(0, 1fr)) !important; gap:7px;
@@ -535,9 +550,18 @@ const uiCSS = `
           .autoban-bar { align-items:flex-start; flex-direction:column; gap:10px; }
           .autoban-switch-row { width:100%; justify-content:space-between; }
           .autoban-actions { align-items:flex-start; flex-direction:column; }
-          .autoban-action-buttons { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+          /* Single column: category labels like 解禁「401 认证失败」(1) need full width. */
+          .autoban-action-buttons { display:grid; grid-template-columns:1fr; width:100%; }
           .autoban-action-buttons .btn, .autoban-action-buttons button { width:100%; min-width:0; }
-          .autoban-action-buttons .danger, .autoban-action-buttons #banUnbanAllBtn { grid-column:1 / -1; }
+          .autoban-action-buttons #banUnbanFilterBtn,
+          .autoban-action-buttons #banDeleteFilterBtn {
+            white-space:normal; height:auto; min-height:36px; line-height:1.25;
+            overflow-wrap:anywhere; justify-content:center; text-align:center;
+          }
+          .autoban-action-buttons #banUnbanFilterBtn span,
+          .autoban-action-buttons #banDeleteFilterBtn span {
+            white-space:normal; overflow-wrap:anywhere; text-align:center;
+          }
           .table-wrap.account-pool { width:100% !important; min-width:0 !important; border-radius:7px; }
           .table-scroll { overflow-x:auto; max-width:100%; }
           .table-wrap.account-pool table,

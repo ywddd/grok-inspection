@@ -42,6 +42,47 @@ func itemSelected(item accountResult, indexSet, classSet map[string]struct{}) bo
 	return false
 }
 
+// inspectionDisableBanErrorCode picks the auto-ban reason for an inspection-page disable.
+// Only exact free-usage-exhausted on quota_exhausted rows get a recoverable window.
+// All other disables stay manual-disabled / manual_unban.
+func inspectionDisableBanErrorCode(item accountResult) string {
+	if strings.TrimSpace(item.Classification) == "quota_exhausted" &&
+		strings.TrimSpace(item.ErrorCode) == exhaustedErrorCode {
+		return exhaustedErrorCode
+	}
+	return manualInspectionBanErrorCode
+}
+
+// lookupResultForDisable picks the inspection row for a single disable.
+// Stage 1 (row select): req.AuthIndex matches only the AuthIndex field (full scan).
+// Stage 2 (name fallback): physical FileName/FileID first, then AuthIndex, then display.
+// Management target alignment is separate (disableActionTargetName -> FileName).
+func lookupResultForDisable(results []accountResult, name, authIndex string) (accountResult, bool) {
+	authIndex = strings.TrimSpace(authIndex)
+	name = strings.TrimSpace(name)
+	if authIndex != "" {
+		for _, item := range results {
+			if strings.TrimSpace(item.AuthIndex) == authIndex {
+				return item, true
+			}
+		}
+	}
+	if item, ok := lookupAccountResultByFileFirst(results, name); ok {
+		return item, true
+	}
+	// Unresolved AuthIndex may still be a physical file token from older clients.
+	if authIndex != "" {
+		return lookupAccountResultByFileFirst(results, authIndex)
+	}
+	return accountResult{}, false
+}
+
+// disableActionTargetName prefers the physical auth file name for CPA Management.
+// AuthIndex is only used when FileName is empty.
+func disableActionTargetName(item accountResult) string {
+	return firstNonEmpty(item.FileName, item.AuthIndex, item.Name, item.Email)
+}
+
 func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult, error) {
 	lang := normalizeLang(req.Lang)
 	force, errForce := normalizeForceAction(req.ForceAction)
@@ -57,14 +98,33 @@ func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult,
 	}
 
 	candidates := make([]accountResult, 0)
-	for _, item := range e.results {
-		if !itemSelected(item, indexSet, classSet) {
-			continue
+	baseRows := e.results
+	if len(indexSet) > 0 {
+		// One target id -> one row (AuthIndex-first). Avoids schedule AuthIndex
+		// colliding with another account's FileName/Name/Email via itemSelected.
+		// Preserve request order; stringSet(indexSet) only gates "any targets?".
+		baseRows = collectAccountsByTargetIDs(e.results, req.AuthIndexes)
+	}
+	for _, item := range baseRows {
+		if len(indexSet) == 0 {
+			if !itemSelected(item, indexSet, classSet) {
+				continue
+			}
+		} else if len(classSet) > 0 {
+			if _, ok := classSet[item.Classification]; !ok {
+				continue
+			}
 		}
 		if force != "" {
 			copied := item
 			copied.Action = force
-			copied.BanErrorCode = req.BanErrorCode
+			if force == "disable" {
+				if code := strings.TrimSpace(req.BanErrorCode); code != "" {
+					copied.BanErrorCode = code
+				} else {
+					copied.BanErrorCode = inspectionDisableBanErrorCode(item)
+				}
+			}
 			candidates = append(candidates, copied)
 			continue
 		}
@@ -77,7 +137,11 @@ func (e *inspectionEngine) collectCandidates(req applyRequest) ([]accountResult,
 				continue
 			}
 		}
-		candidates = append(candidates, item)
+		copied := item
+		if item.Action == "disable" {
+			copied.BanErrorCode = inspectionDisableBanErrorCode(item)
+		}
+		candidates = append(candidates, copied)
 	}
 	return candidates, nil
 }
@@ -184,6 +248,17 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 		e.mu.Unlock()
 		return 0, "", httpErr(http.StatusConflict, fmt.Errorf("%s", T(lang, "busy_unban")))
 	}
+	// Single disable only: resolve ban reason and align CPA target to physical FileName.
+	// enable/delete keep the historical firstNonEmpty(Name, AuthIndex) target.
+	banCode := manualInspectionBanErrorCode
+	if req.Disabled && !req.Delete {
+		if item, ok := lookupResultForDisable(e.results, name, req.AuthIndex); ok {
+			if target := disableActionTargetName(item); target != "" {
+				name = target
+			}
+			banCode = inspectionDisableBanErrorCode(item)
+		}
+	}
 	e.actionSeq++
 	seq := e.actionSeq
 	e.actionInFlight++
@@ -200,8 +275,10 @@ func (e *inspectionEngine) startAction(req actionRequest, password string, heade
 		var errAction error
 		if req.Delete {
 			errAction = deleteAuthFile(name, password, headers, true)
+		} else if req.Disabled {
+			errAction = setAuthDisabledWithBanReason(name, true, password, headers, true, banCode)
 		} else {
-			errAction = setAuthDisabled(name, req.Disabled, password, headers, true)
+			errAction = setAuthDisabled(name, false, password, headers, true)
 		}
 		e.mu.Lock()
 		e.actionInFlight--

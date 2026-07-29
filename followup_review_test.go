@@ -61,15 +61,26 @@ func TestClassifyNon403SuspendedTextNotPermissionDenied(t *testing.T) {
 func TestDetect401AlwaysUnauthorizedEvenWhenBodyIsPermissionDenied(t *testing.T) {
 	cfg := defaultPluginConfig()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	entry, ok := detectBan(pluginapi.UsageRecord{
-		Provider: "xai", AuthID: "a401", Failed: true,
+	// Weak/mismatched 401 bodies must not permanent-autoban.
+	if _, ok := detectBan(pluginapi.UsageRecord{
+		Provider: "xai", AuthID: "a401-weak", Failed: true,
 		Failure: pluginapi.UsageFailure{
 			StatusCode: 401,
 			Body:       `{"code":"permission-denied","error":"no"}`,
 		},
+	}, cfg, now); ok {
+		t.Fatal("weak 401 permission-denied body must not autoban")
+	}
+	// Strong credential failure still bans as unauthorized; body code is diagnostic only.
+	entry, ok := detectBan(pluginapi.UsageRecord{
+		Provider: "xai", AuthID: "a401", Failed: true,
+		Failure: pluginapi.UsageFailure{
+			StatusCode: 401,
+			Body:       `{"code":"authentication_error","error":"token expired"}`,
+		},
 	}, cfg, now)
 	if !ok {
-		t.Fatal("401 must ban")
+		t.Fatal("strong 401 must ban")
 	}
 	if entry.ErrorCode != unauthorizedErrorCode {
 		t.Fatalf("visible error_code=%q want %q", entry.ErrorCode, unauthorizedErrorCode)
@@ -77,8 +88,7 @@ func TestDetect401AlwaysUnauthorizedEvenWhenBodyIsPermissionDenied(t *testing.T)
 	if banCategoryOf(entry.ErrorCode) != "unauthorized" {
 		t.Fatalf("category=%s", banCategoryOf(entry.ErrorCode))
 	}
-	// Optional diagnostic may keep body code without polluting category.
-	if entry.ErrorCodeDiag != "" && entry.ErrorCodeDiag != "permission-denied" {
+	if entry.ErrorCodeDiag != "authentication_error" {
 		t.Fatalf("diag=%q", entry.ErrorCodeDiag)
 	}
 }
@@ -86,21 +96,15 @@ func TestDetect401AlwaysUnauthorizedEvenWhenBodyIsPermissionDenied(t *testing.T)
 func TestDetect401BodySpendingLimitStillUnauthorizedCategory(t *testing.T) {
 	cfg := defaultPluginConfig()
 	now := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
-	entry, ok := detectBan(pluginapi.UsageRecord{
+	// 401 + spending-limit body without credential evidence is not a durable auth ban.
+	if _, ok := detectBan(pluginapi.UsageRecord{
 		Provider: "xai", AuthID: "a401b", Failed: true,
 		Failure: pluginapi.UsageFailure{
 			StatusCode: 401,
 			Body:       `{"code":"personal-team-blocked:spending-limit","error":"x"}`,
 		},
-	}, cfg, now)
-	if !ok {
-		t.Fatal("401 must ban")
-	}
-	if entry.ErrorCode != unauthorizedErrorCode {
-		t.Fatalf("error_code=%q", entry.ErrorCode)
-	}
-	if banCategoryOf(entry.ErrorCode) != "unauthorized" {
-		t.Fatalf("category=%s", banCategoryOf(entry.ErrorCode))
+	}, cfg, now); ok {
+		t.Fatal("401 spending-limit body without strong auth evidence must not autoban")
 	}
 }
 

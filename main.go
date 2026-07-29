@@ -14,7 +14,7 @@ import (
 const (
 	pluginName            = "grok-inspection"
 	pluginDisplayName     = "Grok 账号巡检"
-	pluginVersion         = "0.1.19"
+	pluginVersion         = "0.1.20"
 	resourceContentType   = "text/html; charset=utf-8"
 	jsonContentType       = "application/json; charset=utf-8"
 	managementRoutePrefix = "/plugins/" + pluginName
@@ -92,6 +92,7 @@ func managementRegistration() pluginapi.ManagementRegistrationResponse {
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/bans", Description: "List Grok accounts banned by free-usage / spending-limit / permission-denied / 401."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban", Description: "Unban one Grok account and re-enable it in CPA."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/unban-all", Description: "Unban all Grok accounts tracked by autoban."},
+			{Method: http.MethodPost, Path: managementRoutePrefix + "/ban-delete", Description: "Permanently delete ban-pool Grok accounts from CPA auth-files."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/autoban-settings", Description: "Update autoban enabled switch and fallback hours."},
 			{Method: http.MethodGet, Path: managementRoutePrefix + "/schedule", Description: "Get scheduled full-inspection settings and status."},
 			{Method: http.MethodPost, Path: managementRoutePrefix + "/schedule", Description: "Update scheduled full-inspection settings."},
@@ -364,6 +365,34 @@ func dispatchManagement(req pluginapi.ManagementRequest) pluginapi.ManagementRes
 				status = http.StatusBadRequest
 			}
 			return jsonResponse(status, map[string]any{"error": err.Error(), "ok": false})
+		}
+		return jsonResponse(http.StatusAccepted, map[string]any{
+			"ok":       true,
+			"accepted": true,
+			"unban":    unbanJobStatus(),
+		})
+	case method == http.MethodPost && matchesManagementPath(req.Path, "/ban-delete"):
+		// Async bulk hard-delete of ban-pool accounts (CPA auth-files DELETE).
+		password := resolveManagementPassword(req.Headers)
+		originHeaders := managementRouteHeaders(req.Headers)
+		var body struct {
+			Category string   `json:"category"`
+			AuthIDs  []string `json:"auth_ids"`
+		}
+		if len(req.Body) > 0 {
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]any{"error": "invalid JSON body", "ok": false})
+			}
+		}
+		if err := startBanDeleteJobWithOrigin(body.AuthIDs, body.Category, password, originHeaders); err != nil {
+			status := http.StatusConflict
+			msg := err.Error()
+			if strings.Contains(msg, "no accounts") ||
+				strings.Contains(msg, "missing delete target") ||
+				strings.Contains(msg, "invalid delete category") {
+				status = http.StatusBadRequest
+			}
+			return jsonResponse(status, map[string]any{"error": msg, "ok": false})
 		}
 		return jsonResponse(http.StatusAccepted, map[string]any{
 			"ok":       true,

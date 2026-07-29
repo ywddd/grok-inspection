@@ -11,14 +11,17 @@ import (
 
 // Async bulk unban job (POST /unban-all). Avoids blocking Management on large ban pools.
 type unbanJobState struct {
-	mu           sync.Mutex
-	runID        uint64
-	running      bool
-	stopped      bool
+	mu      sync.Mutex
+	runID   uint64
+	running bool
+	stopped bool
+	// mode is "unban" (default) or "delete". Shared busy slot for both jobs.
+	mode         string
 	done         int
 	total        int
 	enabled      int
 	missing      int
+	deleted      int
 	failed       int
 	current      string
 	failures     []string
@@ -41,13 +44,19 @@ var errUnbanSupersededByNewerBan = errBanSupersededByNewerRevision
 func unbanJobStatus() map[string]any {
 	unbanJob.mu.Lock()
 	defer unbanJob.mu.Unlock()
+	mode := strings.TrimSpace(unbanJob.mode)
+	if mode == "" {
+		mode = "unban"
+	}
 	out := map[string]any{
 		"running":       unbanJob.running,
 		"stopped":       unbanJob.stopped && !unbanJob.running,
+		"mode":          mode,
 		"done":          unbanJob.done,
 		"total":         unbanJob.total,
 		"enabled":       unbanJob.enabled,
 		"missing":       unbanJob.missing,
+		"deleted":       unbanJob.deleted,
 		"failed":        unbanJob.failed,
 		"current":       unbanJob.current,
 		"failures":      append([]string(nil), unbanJob.failures...),
@@ -64,6 +73,8 @@ func unbanJobStatus() map[string]any {
 
 // stopUnbanJob requests cancel. The worker stays busy (running=true) until
 // in-flight CPA calls finish, so a new job cannot overlap the old one.
+// runID is NOT bumped: in-flight work must still attribute done/deleted/enabled
+// progress to this job. isActive() uses stopped to prevent starting new work.
 func stopUnbanJob() {
 	unbanJob.mu.Lock()
 	if !unbanJob.running {
@@ -71,7 +82,6 @@ func stopUnbanJob() {
 		return
 	}
 	unbanJob.stopped = true
-	unbanJob.runID++
 	unbanJob.current = "stopping"
 	unbanJob.mu.Unlock()
 }
@@ -82,11 +92,33 @@ func (j *unbanJobState) isActive(runID uint64) bool {
 	return j.running && j.runID == runID && !j.stopped
 }
 
-// claimUnbanSlot atomically claims the unban busy slot under
+// ownsRun reports whether runID is still the live worker slot (including the
+// drain window after stop). Used for progress attribution of in-flight work.
+func (j *unbanJobState) ownsRun(runID uint64) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.ownsRunLocked(runID)
+}
+
+func (j *unbanJobState) ownsRunLocked(runID uint64) bool {
+	return j.running && j.runID == runID
+}
+
+// claimUnbanSlot atomically claims the shared unban/delete busy slot under
 // engine.mu -> unbanJob.mu. Async jobs join wg before the locks are released,
 // so shutdown cannot start waiting in the gap before Add.
-// Caller must releaseUnbanSlot when finished.
+// Caller must releaseUnbanSlot when finished. Default mode is "unban".
 func claimUnbanSlot(total int, current string, async bool) (runID uint64, err error) {
+	return claimUnbanSlotWithMode(total, current, async, "unban")
+}
+
+// claimUnbanSlotWithMode is claimUnbanSlot with an explicit job mode
+// ("unban" or "delete"). Empty mode defaults to unban for compatibility.
+func claimUnbanSlotWithMode(total int, current string, async bool, mode string) (runID uint64, err error) {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "" {
+		mode = "unban"
+	}
 	engine.mu.Lock()
 	if engine.shuttingDown {
 		engine.mu.Unlock()
@@ -106,10 +138,12 @@ func claimUnbanSlot(total int, current string, async bool) (runID uint64, err er
 	runID = unbanJob.runID
 	unbanJob.running = true
 	unbanJob.stopped = false
+	unbanJob.mode = mode
 	unbanJob.done = 0
 	unbanJob.total = total
 	unbanJob.enabled = 0
 	unbanJob.missing = 0
+	unbanJob.deleted = 0
 	unbanJob.failed = 0
 	unbanJob.current = current
 	unbanJob.failures = nil
@@ -125,7 +159,7 @@ func claimUnbanSlot(total int, current string, async bool) (runID uint64, err er
 }
 
 // releaseUnbanSlot ends the busy/draining state for a claimed unban worker.
-// Safe after stop() which may have bumped runID while this worker still ran.
+// Safe after stop(): running stays true until this worker exits.
 func releaseUnbanSlot(runID uint64) {
 	_ = runID
 	unbanJob.mu.Lock()
@@ -360,9 +394,9 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 				return errRedisable
 			})
 			unbanJob.mu.Lock()
-			sameJob := unbanJob.runID == runID
+			owns := unbanJob.ownsRunLocked(runID)
 			if errEnable != nil {
-				if sameJob {
+				if owns {
 					unbanJob.failed++
 					if len(unbanJob.failures) < 20 {
 						unbanJob.failures = append(unbanJob.failures, target.authID+": "+errEnable.Error())
@@ -370,7 +404,7 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 					unbanJob.done++
 				}
 			} else if errRedisable != nil {
-				if sameJob {
+				if owns {
 					unbanJob.failed++
 					if len(unbanJob.failures) < 20 {
 						msg := target.authID + ": " + errRedisable.Error()
@@ -381,7 +415,7 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 					}
 					unbanJob.done++
 				}
-			} else if sameJob {
+			} else if owns {
 				_ = keptNewer
 				_ = removed
 				if enabled {
@@ -392,7 +426,7 @@ func startUnbanJobWithOrigin(authIDs []string, category, password string, origin
 				unbanJob.done++
 			}
 			unbanJob.mu.Unlock()
-			if !sameJob {
+			if !owns {
 				return
 			}
 		}

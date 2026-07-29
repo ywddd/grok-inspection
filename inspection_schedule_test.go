@@ -224,10 +224,12 @@ func TestScheduledDisablePreservesSpendingLimitReason(t *testing.T) {
 func TestScheduledDeleteSuccessCountKeepsFailures(t *testing.T) {
 	engine.mu.Lock()
 	oldResults := append([]accountResult(nil), engine.results...)
-	engine.results = []accountResult{
+	pre := []accountResult{
+		{AuthIndex: "deleted", FileName: "deleted.json"},
 		{AuthIndex: "failed", FileName: "failed.json"},
 		{AuthIndex: "unrelated", FileName: "other.json"},
 	}
+	engine.results = append([]accountResult(nil), pre...)
 	engine.mu.Unlock()
 	t.Cleanup(func() {
 		engine.mu.Lock()
@@ -235,7 +237,14 @@ func TestScheduledDeleteSuccessCountKeepsFailures(t *testing.T) {
 		engine.mu.Unlock()
 	})
 
-	if got := scheduledActionSuccessCount([]string{"deleted", "failed"}, scheduled403Delete); got != 1 {
+	idents := buildScheduledTargetIdentities(pre, []string{"deleted", "failed"})
+	engine.mu.Lock()
+	engine.results = []accountResult{
+		{AuthIndex: "failed", FileName: "failed.json"},
+		{AuthIndex: "unrelated", FileName: "other.json"},
+	}
+	engine.mu.Unlock()
+	if got := scheduledActionSuccessCountIdentities(idents, scheduled403Delete); got != 1 {
 		t.Fatalf("deleted success count=%d want 1", got)
 	}
 }
@@ -296,7 +305,18 @@ func TestScheduledDisableSuccessCountSupports402(t *testing.T) {
 	if got := scheduledActionSuccessCount([]string{"ok", "fail"}, scheduled402Disable); got != 1 {
 		t.Fatalf("402 disable success count=%d want 1", got)
 	}
-	if got := scheduledActionSuccessCount([]string{"gone", "fail"}, scheduled402Delete); got != 1 {
+
+	preDelete := []accountResult{
+		{AuthIndex: "gone", FileName: "gone.json"},
+		{AuthIndex: "fail", FileName: "fail.json", Disabled: false},
+	}
+	idents := buildScheduledTargetIdentities(preDelete, []string{"gone", "fail"})
+	engine.mu.Lock()
+	engine.results = []accountResult{
+		{AuthIndex: "fail", FileName: "fail.json", Disabled: false},
+	}
+	engine.mu.Unlock()
+	if got := scheduledActionSuccessCountIdentities(idents, scheduled402Delete); got != 1 {
 		t.Fatalf("402 delete success count=%d want 1", got)
 	}
 }
@@ -321,8 +341,18 @@ func TestRecordScheduledActionProgressSeparatesDeleteAndDisable(t *testing.T) {
 		t.Fatalf("disable progress disabled=%d deleted=%d failed=%d", disabled, deleted, failed)
 	}
 
+	preDelete := []accountResult{
+		{AuthIndex: "missing", FileName: "missing.json"},
+		{AuthIndex: "d2", FileName: "d2.json", Disabled: false},
+	}
+	idents := buildScheduledTargetIdentities(preDelete, []string{"missing", "d2"})
+	engine.mu.Lock()
+	engine.results = []accountResult{
+		{AuthIndex: "d2", FileName: "d2.json", Disabled: false},
+	}
+	engine.mu.Unlock()
 	disabled, deleted, failed = 0, 0, 0
-	recordScheduledActionProgress([]string{"missing", "d2"}, scheduled402Delete, &disabled, &deleted, &failed)
+	recordScheduledActionProgressIdentities(idents, scheduled402Delete, &disabled, &deleted, &failed)
 	if deleted != 1 || disabled != 0 || failed != 1 {
 		t.Fatalf("delete progress disabled=%d deleted=%d failed=%d", disabled, deleted, failed)
 	}

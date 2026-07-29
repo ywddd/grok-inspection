@@ -45,6 +45,19 @@ const uiScriptSchedule = `  const classLabel = {
     if (Number(data.last_matched || 0) > 0) {
       const matched403 = Number(data.last_matched_403 || 0);
       const matched402 = Number(data.last_matched_402 || 0);
+      const matched429 = Number(data.last_matched_429 || 0);
+      const matched401 = Number(data.last_matched_401 || 0);
+      const matchedRecover = Number(data.last_matched_recover || 0);
+      if (matched429 > 0) {
+        text += ' · ' + t('schedule_counts_429') + matched429;
+        text += t('schedule_disabled_count') + (data.last_disabled_429 || 0);
+        text += t('schedule_failed_count') + (data.last_failed_429 || 0);
+      }
+      if (matched401 > 0) {
+        text += ' · ' + t('schedule_counts_401') + matched401;
+        text += t('schedule_disabled_count') + (data.last_disabled_401 || 0);
+        text += t('schedule_failed_count') + (data.last_failed_401 || 0);
+      }
       if (matched403 > 0) {
         text += ' · ' + t('schedule_counts') + matched403;
         text += t('schedule_disabled_count') + (data.last_disabled_403 || 0);
@@ -57,13 +70,18 @@ const uiScriptSchedule = `  const classLabel = {
         text += t('schedule_deleted_count') + (data.last_deleted_402 || 0);
         text += t('schedule_failed_count') + (data.last_failed_402 || 0);
       }
-      if (matched403 === 0 && matched402 === 0) {
+      if (matchedRecover > 0) {
+        text += ' · ' + t('schedule_recovered_count') + (data.last_recovered || 0);
+        text += t('schedule_failed_count') + (data.last_failed_recover || 0);
+      }
+      if (matched403 === 0 && matched402 === 0 && matched429 === 0 && matched401 === 0 && matchedRecover === 0) {
         text += ' · ' + t('schedule_counts') + data.last_matched;
         text += t('schedule_disabled_count') + (data.last_disabled || 0);
         text += t('schedule_deleted_count') + (data.last_deleted || 0);
         text += t('schedule_failed_count') + (data.last_failed || 0);
       }
     }
+
     if (data.action_ready === false) text += ' · ' + t('schedule_key_missing');
     if (data.last_error) text += ' · ' + data.last_error;
     return text;
@@ -81,6 +99,8 @@ const uiScriptSchedule = `  const classLabel = {
       $('scheduleInterval').value = String(data.interval_minutes || 60);
       $('scheduleWorkers').value = String(clampWorkers(Number(data.workers) || WORKERS_DEFAULT));
       $('scheduleIncludeDisabled').checked = !!data.include_disabled;
+      $('scheduleOnlyDisabled').checked = !!data.only_disabled;
+      if ($('scheduleOnlyDisabled').checked) $('scheduleIncludeDisabled').checked = false;
       $('scheduleScope').value = data.scope === 'sample' ? 'sample' : 'full';
       if (data.scope === 'sample') {
         // Only seed empty toolbar inputs so a saved schedule never clobbers local edits.
@@ -90,6 +110,7 @@ const uiScriptSchedule = `  const classLabel = {
       syncScheduleScopeFields();
       $('schedule403Action').value = data.permission_denied_action === 'delete' ? 'delete' : 'disable';
       $('schedule402Action').value = data.spending_limit_action === 'delete' ? 'delete' : 'disable';
+      if ($('scheduleAutoRecoverHealthy')) $('scheduleAutoRecoverHealthy').checked = !!data.auto_recover_healthy;
     }
     const status = $('scheduleStatus');
     if (status) status.textContent = scheduleStatusText(data);
@@ -166,11 +187,13 @@ const uiScriptSchedule = `  const classLabel = {
           interval_minutes: interval,
           workers,
           include_disabled: $('scheduleIncludeDisabled').checked,
+          only_disabled: $('scheduleOnlyDisabled').checked,
           scope,
           sample_count: sampleCount,
           sample_percent: samplePercent,
           permission_denied_action: action,
-          spending_limit_action: action402
+          spending_limit_action: action402,
+          auto_recover_healthy: !!( $('scheduleAutoRecoverHealthy') && $('scheduleAutoRecoverHealthy').checked )
         })
       });
       const data = (raw && raw.result && typeof raw.result === 'object') ? raw.result : raw;

@@ -56,22 +56,34 @@ type persistedInspectionSchedule struct {
 	SamplePercent          int    `json:"sample_percent,omitempty"`
 	PermissionDeniedAction string `json:"permission_denied_action"`
 	SpendingLimitAction    string `json:"spending_limit_action"`
-	LastRunAt              string `json:"last_run_at,omitempty"`
-	NextRunAt              string `json:"next_run_at,omitempty"`
-	LastStatus             string `json:"last_status,omitempty"`
-	LastError              string `json:"last_error,omitempty"`
-	LastMatched            int    `json:"last_matched,omitempty"`
-	LastDisabled           int    `json:"last_disabled,omitempty"`
-	LastDeleted            int    `json:"last_deleted,omitempty"`
-	LastFailed             int    `json:"last_failed,omitempty"`
-	LastMatched403         int    `json:"last_matched_403,omitempty"`
-	LastDisabled403        int    `json:"last_disabled_403,omitempty"`
-	LastDeleted403         int    `json:"last_deleted_403,omitempty"`
-	LastFailed403          int    `json:"last_failed_403,omitempty"`
-	LastMatched402         int    `json:"last_matched_402,omitempty"`
-	LastDisabled402        int    `json:"last_disabled_402,omitempty"`
-	LastDeleted402         int    `json:"last_deleted_402,omitempty"`
-	LastFailed402          int    `json:"last_failed_402,omitempty"`
+	// AutoRecoverHealthy enables enable/CAS restore for Disabled+healthy accounts
+	// among this run's probed results that already carry an exact free-usage-exhausted ban.
+	AutoRecoverHealthy bool   `json:"auto_recover_healthy,omitempty"`
+	LastRunAt          string `json:"last_run_at,omitempty"`
+	NextRunAt          string `json:"next_run_at,omitempty"`
+	LastStatus         string `json:"last_status,omitempty"`
+	LastError          string `json:"last_error,omitempty"`
+	LastMatched        int    `json:"last_matched,omitempty"`
+	LastDisabled       int    `json:"last_disabled,omitempty"`
+	LastDeleted        int    `json:"last_deleted,omitempty"`
+	LastFailed         int    `json:"last_failed,omitempty"`
+	LastMatched403     int    `json:"last_matched_403,omitempty"`
+	LastDisabled403    int    `json:"last_disabled_403,omitempty"`
+	LastDeleted403     int    `json:"last_deleted_403,omitempty"`
+	LastFailed403      int    `json:"last_failed_403,omitempty"`
+	LastMatched402     int    `json:"last_matched_402,omitempty"`
+	LastDisabled402    int    `json:"last_disabled_402,omitempty"`
+	LastDeleted402     int    `json:"last_deleted_402,omitempty"`
+	LastFailed402      int    `json:"last_failed_402,omitempty"`
+	LastMatched429     int    `json:"last_matched_429,omitempty"`
+	LastDisabled429    int    `json:"last_disabled_429,omitempty"`
+	LastFailed429      int    `json:"last_failed_429,omitempty"`
+	LastMatched401     int    `json:"last_matched_401,omitempty"`
+	LastDisabled401    int    `json:"last_disabled_401,omitempty"`
+	LastFailed401      int    `json:"last_failed_401,omitempty"`
+	LastMatchedRecover int    `json:"last_matched_recover,omitempty"`
+	LastRecovered      int    `json:"last_recovered,omitempty"`
+	LastFailedRecover  int    `json:"last_failed_recover,omitempty"`
 }
 
 type inspectionScheduleUpdate struct {
@@ -79,11 +91,13 @@ type inspectionScheduleUpdate struct {
 	IntervalMinutes        *int    `json:"interval_minutes"`
 	Workers                *int    `json:"workers"`
 	IncludeDisabled        *bool   `json:"include_disabled"`
+	OnlyDisabled           *bool   `json:"only_disabled"`
 	Scope                  *string `json:"scope"`
 	SampleCount            *int    `json:"sample_count"`
 	SamplePercent          *int    `json:"sample_percent"`
 	PermissionDeniedAction *string `json:"permission_denied_action"`
 	SpendingLimitAction    *string `json:"spending_limit_action"`
+	AutoRecoverHealthy     *bool   `json:"auto_recover_healthy"`
 }
 
 // afterScheduledStartHook is optional test-only; production keeps nil.
@@ -197,6 +211,10 @@ func normalizePersistedInspectionSchedule(cfg persistedInspectionSchedule) persi
 		cfg.SampleCount = 0
 		cfg.SamplePercent = 0
 	}
+	// only_disabled is mutually exclusive with include_disabled.
+	if cfg.OnlyDisabled {
+		cfg.IncludeDisabled = false
+	}
 	if !cfg.Enabled {
 		cfg.NextRunAt = ""
 	}
@@ -220,11 +238,16 @@ func scheduledInspectionRequest(cfg persistedInspectionSchedule) startRequest {
 	if err != nil {
 		workers = defaultWorkers
 	}
+	onlyDisabled := cfg.OnlyDisabled
+	includeDisabled := cfg.IncludeDisabled
+	if onlyDisabled {
+		includeDisabled = false
+	}
 	req := startRequest{
 		Lang:            "zh",
 		Workers:         workers,
-		IncludeDisabled: cfg.IncludeDisabled,
-		OnlyDisabled:    false,
+		IncludeDisabled: includeDisabled,
+		OnlyDisabled:    onlyDisabled,
 		Incremental:     false,
 		Classifications: nil,
 	}
@@ -276,6 +299,15 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 	}
 	if req.IncludeDisabled != nil {
 		cfg.IncludeDisabled = *req.IncludeDisabled
+		if *req.IncludeDisabled {
+			cfg.OnlyDisabled = false
+		}
+	}
+	if req.OnlyDisabled != nil {
+		cfg.OnlyDisabled = *req.OnlyDisabled
+		if *req.OnlyDisabled {
+			cfg.IncludeDisabled = false
+		}
 	}
 	if req.Scope != nil {
 		scope, err := normalizeScheduleScope(*req.Scope)
@@ -312,6 +344,9 @@ func updateInspectionSchedule(req inspectionScheduleUpdate) (persistedInspection
 		}
 		cfg.SpendingLimitAction = action
 	}
+	if req.AutoRecoverHealthy != nil {
+		cfg.AutoRecoverHealthy = *req.AutoRecoverHealthy
+	}
 	if cfg.Enabled {
 		cfg.NextRunAt = nextInspectionScheduleRun(time.Now(), cfg.IntervalMinutes).Format(time.RFC3339)
 		cfg.LastStatus = "waiting"
@@ -347,11 +382,13 @@ func inspectionScheduleStatus() map[string]any {
 		"interval_minutes":         cfg.IntervalMinutes,
 		"workers":                  cfg.Workers,
 		"include_disabled":         cfg.IncludeDisabled,
+		"only_disabled":            cfg.OnlyDisabled,
 		"scope":                    cfg.Scope,
 		"sample_count":             cfg.SampleCount,
 		"sample_percent":           cfg.SamplePercent,
 		"permission_denied_action": cfg.PermissionDeniedAction,
 		"spending_limit_action":    cfg.SpendingLimitAction,
+		"auto_recover_healthy":     cfg.AutoRecoverHealthy,
 		"last_run_at":              cfg.LastRunAt,
 		"next_run_at":              cfg.NextRunAt,
 		"last_status":              cfg.LastStatus,
@@ -368,6 +405,15 @@ func inspectionScheduleStatus() map[string]any {
 		"last_disabled_402":        cfg.LastDisabled402,
 		"last_deleted_402":         cfg.LastDeleted402,
 		"last_failed_402":          cfg.LastFailed402,
+		"last_matched_429":         cfg.LastMatched429,
+		"last_disabled_429":        cfg.LastDisabled429,
+		"last_failed_429":          cfg.LastFailed429,
+		"last_matched_401":         cfg.LastMatched401,
+		"last_disabled_401":        cfg.LastDisabled401,
+		"last_failed_401":          cfg.LastFailed401,
+		"last_matched_recover":     cfg.LastMatchedRecover,
+		"last_recovered":           cfg.LastRecovered,
+		"last_failed_recover":      cfg.LastFailedRecover,
 		"action_ready":             inspectionScheduleManagementKey() != "",
 	}
 }
@@ -515,6 +561,13 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 			*failed = len(targets)
 			return scheduledActionFailed
 		}
+		// Freeze per-target row identity BEFORE apply/delete so post-action
+		// success counting cannot re-resolve a token onto a colliding survivor
+		// (e.g. deleted A.AuthIndex=q while B.FileName=q remains).
+		engine.mu.Lock()
+		preResults := append([]accountResult(nil), engine.results...)
+		engine.mu.Unlock()
+		identities := buildScheduledTargetIdentities(preResults, targets)
 		req := applyRequest{
 			Lang:         "zh",
 			AuthIndexes:  targets,
@@ -533,20 +586,20 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 			select {
 			case <-inspectionScheduleRuntime.stop:
 				// Count progress so far, then stop sequential disposal.
-				recordScheduledActionProgress(targets, action, disabled, deleted, failed)
+				recordScheduledActionProgressIdentities(identities, action, disabled, deleted, failed)
 				return scheduledActionStopped
 			case <-time.After(250 * time.Millisecond):
 			}
 			snap := engine.snapshot(false)
 			if !snap.Applying {
 				if snap.Stopped {
-					recordScheduledActionProgress(targets, action, disabled, deleted, failed)
+					recordScheduledActionProgressIdentities(identities, action, disabled, deleted, failed)
 					return scheduledActionStopped
 				}
 				break
 			}
 		}
-		recordScheduledActionProgress(targets, action, disabled, deleted, failed)
+		recordScheduledActionProgressIdentities(identities, action, disabled, deleted, failed)
 		finalSnap := engine.snapshot(false)
 		if len(finalSnap.ApplyFailures) > 0 {
 			stats.errors = append(stats.errors, finalSnap.ApplyFailures...)
@@ -555,6 +608,21 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 			return scheduledActionFailed
 		}
 		return scheduledActionOK
+	}
+
+	// Exact free-usage 429: disable + timed ban window (BanErrorCode=exhausted).
+	result429 := runAction(scheduled403Disable, exhaustedErrorCode, scheduledQuotaExhaustedTargets(scheduled403Disable, scope),
+		&stats.matched429, &stats.disabled429, &stats.deleted429, &stats.failed429)
+	if result429 == scheduledActionStopped {
+		setInspectionScheduleRuntimeStatus("stopped", strings.Join(stats.errors, "; "), started, stats)
+		return
+	}
+	// Exact unauthorized 401: disable only (manual restore). Never delete here.
+	result401 := runAction(scheduled403Disable, unauthorizedErrorCode, scheduledUnauthorizedTargets(scheduled403Disable, scope),
+		&stats.matched401, &stats.disabled401, &stats.deleted401, &stats.failed401)
+	if result401 == scheduledActionStopped {
+		setInspectionScheduleRuntimeStatus("stopped", strings.Join(stats.errors, "; "), started, stats)
+		return
 	}
 
 	action403, err := normalizeScheduled403Action(cfg.PermissionDeniedAction)
@@ -578,49 +646,88 @@ func runScheduledInspection(cfg persistedInspectionSchedule) {
 		return
 	}
 
-	if password == "" && stats.failed403+stats.failed402 > 0 {
+	if cfg.AutoRecoverHealthy {
+		recoverTargets := scheduledHealthyRecoverTargets(scope)
+		resultRecover := runAction("enable", "", recoverTargets,
+			&stats.matchedRecover, &stats.recovered, &stats.deletedRecover, &stats.failedRecover)
+		if resultRecover == scheduledActionStopped {
+			setInspectionScheduleRuntimeStatus("stopped", strings.Join(stats.errors, "; "), started, stats)
+			return
+		}
+	}
+
+	failedTotal := stats.failed403 + stats.failed402 + stats.failed429 + stats.failed401 + stats.failedRecover
+	matchedTotal := stats.matched403 + stats.matched402 + stats.matched429 + stats.matched401 + stats.matchedRecover
+	if password == "" && failedTotal > 0 {
 		stats.errors = append(stats.errors, "CPA management password is unavailable")
 	}
-	if stats.matched403 == 0 && stats.matched402 == 0 {
-		setInspectionScheduleRuntimeStatus("completed", "", started, stats)
-		return
+	status := scheduledCompletionStatus(matchedTotal, failedTotal, stats.errors)
+	errText := ""
+	if matchedTotal > 0 {
+		errText = strings.Join(stats.errors, "; ")
 	}
-	status := "completed"
-	if stats.failed403+stats.failed402 > 0 {
-		status = "completed_with_errors"
-	}
-	setInspectionScheduleRuntimeStatus(status, strings.Join(stats.errors, "; "), started, stats)
+	setInspectionScheduleRuntimeStatus(status, errText, started, stats)
 }
 
 func recordScheduledActionProgress(targets []string, action string, disabled, deleted, failed *int) {
-	succeeded := scheduledActionSuccessCount(targets, action)
-	*failed = len(targets) - succeeded
-	if action == scheduled403Delete || action == scheduled402Delete {
+	// Test/helper path: resolve identities against the current results snapshot.
+	// Production disposal uses recordScheduledActionProgressIdentities with
+	// pre-apply identities captured before startApply.
+	engine.mu.Lock()
+	results := append([]accountResult(nil), engine.results...)
+	engine.mu.Unlock()
+	recordScheduledActionProgressIdentities(buildScheduledTargetIdentities(results, targets), action, disabled, deleted, failed)
+}
+
+func recordScheduledActionProgressIdentities(identities []scheduledTargetIdentity, action string, disabled, deleted, failed *int) {
+	succeeded := scheduledActionSuccessCountIdentities(identities, action)
+	*failed = len(identities) - succeeded
+	if action == "delete" || action == scheduled403Delete || action == scheduled402Delete {
 		*deleted = succeeded
-	} else {
-		*disabled = succeeded
+		return
 	}
+	// disable success and enable/recover success both report through *disabled.
+	*disabled = succeeded
+}
+
+// scheduledCompletionStatus decides the terminal schedule status after auto-actions.
+// When matched>0, any non-empty stats.errors (e.g. ban-store persist failure after a
+// successful CPA mutation) must yield completed_with_errors even if failedTotal is 0.
+func scheduledCompletionStatus(matchedTotal, failedTotal int, errors []string) string {
+	if matchedTotal <= 0 {
+		return "completed"
+	}
+	if failedTotal > 0 || scheduleActionErrorsPresent(errors) {
+		return "completed_with_errors"
+	}
+	return "completed"
+}
+
+func scheduleActionErrorsPresent(errors []string) bool {
+	for _, err := range errors {
+		if strings.TrimSpace(err) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func scheduledPermissionDeniedTargets(action string, scope map[string]struct{}) []string {
-	return scheduledTargets(403, "permission_denied", permissionDeniedErrorCode, action, scope)
+	// Exact ErrorCode only: substring/contains permission-denied must never auto-act.
+	return scheduledTargetsExact(403, "permission_denied", permissionDeniedErrorCode, action, scope)
 }
 
 func scheduledSpendingLimitTargets(action string, scope map[string]struct{}) []string {
 	return scheduledTargetsExact(402, "spending_limit", spendingLimitErrorCode, action, scope)
 }
 
-func scheduledTargets(status int, classification, errorCode, action string, scope map[string]struct{}) []string {
-	return scheduledTargetsMatch(status, classification, errorCode, action, false, scope)
-}
-
 func scheduledTargetsExact(status int, classification, errorCode, action string, scope map[string]struct{}) []string {
-	return scheduledTargetsMatch(status, classification, errorCode, action, true, scope)
+	return scheduledTargetsMatch(status, classification, errorCode, action, scope)
 }
 
 // scope limits matching to accounts probed by the current run. nil scope means
-// the run covered the whole account list.
-func scheduledTargetsMatch(status int, classification, errorCode, action string, exactCode bool, scope map[string]struct{}) []string {
+// the run covered the whole account list. ErrorCode must match exactly.
+func scheduledTargetsMatch(status int, classification, errorCode, action string, scope map[string]struct{}) []string {
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
 	targets := make([]string, 0)
@@ -633,11 +740,7 @@ func scheduledTargetsMatch(status int, classification, errorCode, action string,
 		if item.HTTPStatus != status || item.Classification != classification {
 			continue
 		}
-		if exactCode {
-			if code != wantCode {
-				continue
-			}
-		} else if code != wantCode && !strings.Contains(code, wantCode) {
+		if code != wantCode {
 			continue
 		}
 		if action == "disable" && item.Disabled {
@@ -650,31 +753,123 @@ func scheduledTargetsMatch(status int, classification, errorCode, action string,
 	return targets
 }
 
-func scheduledActionSuccessCount(targets []string, action string) int {
-	wanted := stringSet(targets)
-	engine.mu.Lock()
-	defer engine.mu.Unlock()
-	matched := 0
-	isDelete := action == scheduled403Delete || action == scheduled402Delete
-	isDisable := action == scheduled403Disable || action == scheduled402Disable
-	for _, item := range engine.results {
-		if !itemSelected(item, wanted, nil) {
+// scheduledTargetIdentity freezes the row a schedule target token mapped to
+// before apply/delete, so post-action accounting cannot jump to another row
+// that merely shares a FileName/Name/Email with the original token.
+type scheduledTargetIdentity struct {
+	Token    string
+	StableID string
+	Resolved bool
+	// Fields for enable/ban checks when the row is still present post-action.
+	AuthIndex string
+	FileName  string
+	FileID    string
+	Name      string
+	Email     string
+}
+
+func accountResultStableID(item accountResult) string {
+	return strings.Join([]string{
+		strings.TrimSpace(item.AuthIndex),
+		strings.TrimSpace(item.FileName),
+		strings.TrimSpace(item.FileID),
+		strings.TrimSpace(item.Name),
+		strings.TrimSpace(item.Email),
+	}, string(rune(0x1e)))
+}
+
+func buildScheduledTargetIdentities(results []accountResult, tokens []string) []scheduledTargetIdentity {
+	out := make([]scheduledTargetIdentity, 0, len(tokens))
+	for _, tok := range tokens {
+		tok = strings.TrimSpace(tok)
+		id := scheduledTargetIdentity{Token: tok}
+		item, ok := resolveAccountResultByTargetID(results, tok)
+		if !ok {
+			out = append(out, id)
 			continue
 		}
-		if isDelete || (isDisable && item.Disabled) {
-			matched++
+		id.Resolved = true
+		id.StableID = accountResultStableID(item)
+		id.AuthIndex = item.AuthIndex
+		id.FileName = item.FileName
+		id.FileID = item.FileID
+		id.Name = item.Name
+		id.Email = item.Email
+		out = append(out, id)
+	}
+	return out
+}
+
+func findAccountResultByStableID(results []accountResult, stableID string) (accountResult, bool) {
+	if strings.TrimSpace(stableID) == "" {
+		return accountResult{}, false
+	}
+	for _, item := range results {
+		if accountResultStableID(item) == stableID {
+			return item, true
 		}
 	}
-	if isDelete {
-		return len(targets) - matched
+	return accountResult{}, false
+}
+
+func scheduledActionSuccessCount(targets []string, action string) int {
+	// Convenience for tests: build identities from the *current* results snapshot.
+	// Production disposal captures identities before startApply instead.
+	engine.mu.Lock()
+	results := append([]accountResult(nil), engine.results...)
+	engine.mu.Unlock()
+	return scheduledActionSuccessCountIdentities(buildScheduledTargetIdentities(results, targets), action)
+}
+
+func scheduledActionSuccessCountIdentities(identities []scheduledTargetIdentity, action string) int {
+	// Snapshot results, then drop engine.mu before any ban-store reads so we never
+	// nest engine.mu -> store locks opposite to Management/CAS paths.
+	engine.mu.Lock()
+	results := append([]accountResult(nil), engine.results...)
+	engine.mu.Unlock()
+
+	success := 0
+	isDelete := action == "delete" || action == scheduled403Delete || action == scheduled402Delete
+	isDisable := action == "disable" || action == scheduled403Disable || action == scheduled402Disable
+	isEnable := action == "enable"
+	for _, id := range identities {
+		if !id.Resolved || id.StableID == "" {
+			continue
+		}
+		item, ok := findAccountResultByStableID(results, id.StableID)
+		switch {
+		case isDelete:
+			// Delete success: the pre-action row fingerprint is gone.
+			// Do not re-resolve id.Token (may match a colliding survivor).
+			if !ok {
+				success++
+			}
+		case isDisable:
+			if ok && item.Disabled {
+				success++
+			}
+		case isEnable:
+			// Recover success: row enabled AND no matching ban left (CAS re-disable
+			// failure leaves Disabled=false with ban retained - must count as fail).
+			if !ok {
+				continue
+			}
+			if item.Disabled || accountHasAnyMatchingBan(item) {
+				continue
+			}
+			success++
+		}
 	}
-	return matched
+	return success
 }
 
 type scheduleRunStats struct {
-	matched403, disabled403, deleted403, failed403 int
-	matched402, disabled402, deleted402, failed402 int
-	errors                                         []string
+	matched403, disabled403, deleted403, failed403           int
+	matched402, disabled402, deleted402, failed402           int
+	matched429, disabled429, deleted429, failed429           int
+	matched401, disabled401, deleted401, failed401           int
+	matchedRecover, recovered, deletedRecover, failedRecover int
+	errors                                                   []string
 }
 
 func setInspectionScheduleRuntimeStatus(status, lastError string, started time.Time, stats scheduleRunStats) {
@@ -698,10 +893,19 @@ func setInspectionScheduleRuntimeStatus(status, lastError string, started time.T
 	cfg.LastDisabled402 = stats.disabled402
 	cfg.LastDeleted402 = stats.deleted402
 	cfg.LastFailed402 = stats.failed402
-	cfg.LastMatched = stats.matched403 + stats.matched402
-	cfg.LastDisabled = stats.disabled403 + stats.disabled402
+	cfg.LastMatched429 = stats.matched429
+	cfg.LastDisabled429 = stats.disabled429
+	cfg.LastFailed429 = stats.failed429
+	cfg.LastMatched401 = stats.matched401
+	cfg.LastDisabled401 = stats.disabled401
+	cfg.LastFailed401 = stats.failed401
+	cfg.LastMatchedRecover = stats.matchedRecover
+	cfg.LastRecovered = stats.recovered
+	cfg.LastFailedRecover = stats.failedRecover
+	cfg.LastMatched = stats.matched403 + stats.matched402 + stats.matched429 + stats.matched401 + stats.matchedRecover
+	cfg.LastDisabled = stats.disabled403 + stats.disabled402 + stats.disabled429 + stats.disabled401
 	cfg.LastDeleted = stats.deleted403 + stats.deleted402
-	cfg.LastFailed = stats.failed403 + stats.failed402
+	cfg.LastFailed = stats.failed403 + stats.failed402 + stats.failed429 + stats.failed401 + stats.failedRecover
 	if cfg.Enabled {
 		cfg.NextRunAt = nextInspectionScheduleRun(time.Now(), cfg.IntervalMinutes).Format(time.RFC3339)
 	} else {

@@ -33,6 +33,8 @@ func resetUnbanJobForTest() {
 	unbanJob.mu.Lock()
 	unbanJob.running = false
 	unbanJob.stopped = false
+	unbanJob.mode = ""
+	unbanJob.deleted = 0
 	unbanJob.runID++
 	unbanJob.mu.Unlock()
 	unbanJob.wg.Wait()

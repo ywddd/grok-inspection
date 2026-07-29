@@ -216,10 +216,20 @@ func TestUIPreviewMetricAlignment(t *testing.T) {
 		}
 	}
 
-	// ~1000px schedule stays single-line: nowrap on desktop schedule-controls.
-	if !regexp.MustCompile(`\.schedule-controls\s*\{[^}]*flex-wrap:\s*nowrap`).MatchString(css) &&
-		!strings.Contains(css, "flex-wrap:nowrap") {
-		t.Fatal("schedule-controls must use flex-wrap:nowrap for ~1000px single-row layout")
+	// Desktop English labels may exceed one row; both schedule containers must wrap
+	// without clipping or pushing the save button outside the available width.
+	for _, selector := range []string{`.schedule-actions`, `.schedule-controls`} {
+		quoted := regexp.QuoteMeta(selector)
+		if !regexp.MustCompile(quoted + `\s*\{[^}]*flex-wrap:\s*wrap`).MatchString(css) {
+			t.Fatalf("%s must wrap on desktop when localized labels are long", selector)
+		}
+		if !regexp.MustCompile(quoted + `\s*\{[^}]*overflow:\s*visible`).MatchString(css) {
+			t.Fatalf("%s must keep wrapped desktop controls visible", selector)
+		}
+	}
+	if !regexp.MustCompile(`\.schedule-row\s+#scheduleSaveBtn\s*\{[^}]*flex:\s*0\s+0\s+auto`).MatchString(css) &&
+		!regexp.MustCompile(`\.schedule-row\s*>\s*\.btn[^}]*#scheduleSaveBtn\s*\{[^}]*flex:\s*0\s+0\s+auto`).MatchString(css) {
+		t.Fatal("schedule save button must remain non-shrinking when desktop controls wrap")
 	}
 	// Status must never be squeezed into a narrow column: it wraps to its own line instead.
 	if !regexp.MustCompile(`\.schedule-row\s*\{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap`).MatchString(css) {

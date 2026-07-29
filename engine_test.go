@@ -916,6 +916,364 @@ func TestDeleteAuthFilesBatchBuildsNamesBody(t *testing.T) {
 	}
 }
 
+func TestDeleteAuthFilesBatch207EmptyObjectKeepsLocal(t *testing.T) {
+	testDeleteAuthFilesBatch207UnusableSchema(t, `{}`)
+}
+
+func TestDeleteAuthFilesBatch207UnknownFieldsOnlyKeepsLocal(t *testing.T) {
+	testDeleteAuthFilesBatch207UnusableSchema(t, `{"foo":"bar"}`)
+}
+
+func TestDeleteAuthFilesBatch207StatusWithoutFailedKeepsLocal(t *testing.T) {
+	testDeleteAuthFilesBatch207UnusableSchema(t, `{"status":"weird"}`)
+}
+
+func testDeleteAuthFilesBatch207UnusableSchema(t *testing.T, body string) {
+	t.Helper()
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "s1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	items := []accountResult{
+		{AuthIndex: "s1", Name: "s1.json", FileName: "s1.json"},
+		{AuthIndex: "s2", Name: "s2.json", FileName: "s2.json"},
+	}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) < 2 {
+		t.Fatalf("body=%s fails=%v want batch fail-closed", body, fails)
+	}
+	if _, ok := activeStore.Get("s1.json"); !ok {
+		t.Fatalf("body=%s cleared ban", body)
+	}
+	engine.mu.Lock()
+	n := len(engine.results)
+	engine.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("body=%s cleared results n=%d", body, n)
+	}
+}
+
+func TestDeleteAuthFilesBatch207EmptyFailedArrayClearsAll(t *testing.T) {
+	// Explicit failed:[] is known schema with zero failures -> success clear.
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"status":"multi","failed":[]}`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "ok207.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	items := []accountResult{{AuthIndex: "ok207", Name: "ok207.json", FileName: "ok207.json"}}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) != 0 {
+		t.Fatalf("failed[] empty should succeed, fails=%v", fails)
+	}
+	if _, ok := activeStore.Get("ok207.json"); ok {
+		t.Fatal("ban should clear when failed is explicit empty array")
+	}
+}
+
+func TestDeleteAuthFilesBatch207MalformedKeepsLocal(t *testing.T) {
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"failed": not-json`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "m1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	items := []accountResult{
+		{AuthIndex: "m1", Name: "m1.json", FileName: "m1.json"},
+		{AuthIndex: "m2", Name: "m2.json", FileName: "m2.json"},
+	}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) < 2 {
+		t.Fatalf("malformed 207 must fail batch rows, fails=%v", fails)
+	}
+	if _, ok := activeStore.Get("m1.json"); !ok {
+		t.Fatal("ban cleared on malformed 207")
+	}
+	engine.mu.Lock()
+	n := len(engine.results)
+	engine.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("results cleared on malformed 207: n=%d", n)
+	}
+}
+
+func TestDeleteAuthFilesBatch207UnknownNameKeepsLocal(t *testing.T) {
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"status":"multi","failed":[{"name":"not-requested.json","error":"nope"}]}`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "u1.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	items := []accountResult{
+		{AuthIndex: "u1", Name: "u1.json", FileName: "u1.json"},
+		{AuthIndex: "u2", Name: "u2.json", FileName: "u2.json"},
+	}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) < 2 {
+		t.Fatalf("unknown-name 207 must fail-closed batch, fails=%v", fails)
+	}
+	if _, ok := activeStore.Get("u1.json"); !ok {
+		t.Fatal("ban must remain on unknown-name 207")
+	}
+	engine.mu.Lock()
+	n := len(engine.results)
+	engine.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("results cleared on unknown-name 207: n=%d", n)
+	}
+}
+
+func TestDeleteAuthFilesBatch207EmptyFailedNameKeepsLocal(t *testing.T) {
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"failed":[{"name":"","error":"blank"}]}`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	items := []accountResult{{AuthIndex: "e1", Name: "e1.json", FileName: "e1.json"}}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) == 0 {
+		t.Fatal("empty failed name must not succeed")
+	}
+	engine.mu.Lock()
+	n := len(engine.results)
+	engine.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("local cleared on empty failed name: n=%d", n)
+	}
+}
+
+func TestDeleteAuthFilesBatch200StatusOKStillClears(t *testing.T) {
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{
+		AuthID: "ok.json", Provider: "xai", ErrorCode: exhaustedErrorCode,
+		BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true,
+	})
+	items := []accountResult{{AuthIndex: "ok", Name: "ok.json", FileName: "ok.json"}}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) != 0 {
+		t.Fatalf("200 ok failures=%v", fails)
+	}
+	if _, ok := activeStore.Get("ok.json"); ok {
+		t.Fatal("ban should clear on 200 status ok")
+	}
+	engine.mu.Lock()
+	n := len(engine.results)
+	engine.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("results should clear on 200 ok, n=%d", n)
+	}
+}
+
+func TestDeleteAuthFilesBatch207MappedPartialStillWorks(t *testing.T) {
+	isolateActiveStore(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"status":"multi","failed":[{"name":"bad.json","error":"busy"}]}`))
+	}))
+	defer server.Close()
+	oldBase := getCPAManagementBaseURL()
+	oldDo := getCPAManagementDo()
+	setCPAManagementBaseURL(server.URL)
+	setCPAManagementDo(server.Client().Do)
+	t.Cleanup(func() {
+		setCPAManagementBaseURL(oldBase)
+		setCPAManagementDo(oldDo)
+	})
+	_ = os.Setenv("MANAGEMENT_PASSWORD", "test-pass")
+	t.Cleanup(func() { _ = os.Unsetenv("MANAGEMENT_PASSWORD") })
+
+	now := time.Now()
+	activeStore.Set(banEntry{AuthID: "ok.json", Provider: "xai", ErrorCode: exhaustedErrorCode, BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true})
+	activeStore.Set(banEntry{AuthID: "bad.json", Provider: "xai", ErrorCode: exhaustedErrorCode, BannedAt: now, ResetAt: now.Add(time.Hour), ResetSource: "local_plus_fallback", CpaSynced: true})
+	items := []accountResult{
+		{AuthIndex: "ok", Name: "ok.json", FileName: "ok.json"},
+		{AuthIndex: "bad", Name: "bad.json", FileName: "bad.json"},
+	}
+	engine.mu.Lock()
+	old := append([]accountResult(nil), engine.results...)
+	engine.results = append([]accountResult(nil), items...)
+	engine.mu.Unlock()
+	t.Cleanup(func() {
+		engine.mu.Lock()
+		engine.results = old
+		engine.mu.Unlock()
+	})
+	fails := deleteAuthFilesBatch(items, "test-pass", nil, false)
+	if len(fails) != 1 || !strings.Contains(fails[0], "bad.json") {
+		t.Fatalf("fails=%v", fails)
+	}
+	if _, ok := activeStore.Get("ok.json"); ok {
+		t.Fatal("ok ban should clear")
+	}
+	if _, ok := activeStore.Get("bad.json"); !ok {
+		t.Fatal("bad ban must remain")
+	}
+}
+
 func TestApplyIsAsyncAndStatusStaysResponsive(t *testing.T) {
 	dir := t.TempDir()
 	setStoreFilePathForTest(dir + string(os.PathSeparator) + "results.json")

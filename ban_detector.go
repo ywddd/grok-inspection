@@ -93,6 +93,33 @@ func isAccountLevelPermissionDenied(status int, code, message string) bool {
 	return false
 }
 
+
+// isStrongUnauthorizedEvidence reports durable credential failures.
+// Bare HTTP 401 + "Authentication required" is intentionally excluded: that
+// pattern is common transient proxy noise on free-usage accounts.
+func isStrongUnauthorizedEvidence(code, message string) bool {
+	blob := lower(code) + " " + lower(message)
+	// Keep this list narrow. Broad phrases like "access denied" / "refresh token"
+	// appear in non-credential failures and must not permanent-ban.
+	return containsAny(blob,
+		"token is expired",
+		"token has been invalidated",
+		"token expired",
+		"token_expired",
+		"invalid_grant",
+		"invalid_token",
+		"invalid credentials",
+		"expired credentials",
+		"authentication_error",
+		"unauthenticated",
+		"access token is invalid",
+		"access token expired",
+		"refresh token is invalid",
+		"refresh token expired",
+		"refresh_token is invalid",
+	)
+}
+
 func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (banEntry, bool) {
 	provider := normalizeProvider(record.Provider)
 	if provider != "xai" || !record.Failed {
@@ -109,8 +136,13 @@ func detectBan(record pluginapi.UsageRecord, cfg pluginConfig, now time.Time) (b
 	msg := parseErrorMessage(record.Failure.Body)
 	var diagCode string
 	if status == http.StatusUnauthorized {
-		// Visible error_code/category must always be unauthorized for any HTTP 401,
-		// even when body code is permission-denied / spending-limit / etc.
+		// Free Grok accounts frequently emit transient proxy/Cloudflare 401
+		// {"error":"Authentication required"} shortly before a true free-usage 429.
+		// Only strong credential-failure evidence may permanent-autoban as 401.
+		if !isStrongUnauthorizedEvidence(errorCode, msg) {
+			return banEntry{}, false
+		}
+		// Visible error_code/category stays unauthorized; body code is diagnostic only.
 		if hasCode {
 			diagCode = errorCode
 		}

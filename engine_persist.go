@@ -96,17 +96,37 @@ func (e *inspectionEngine) waitAsyncPersist() {
 
 // persist copies under lock and writes outside the critical section.
 func (e *inspectionEngine) persist() {
+	_ = e.persistSync()
+}
+
+// persistSync writes the current results snapshot and returns THIS write's error.
+// Callers that must attribute success/failure to a specific job should use the
+// returned error rather than reading e.persistError (which can be overwritten by
+// a concurrent newer persist).
+func (e *inspectionEngine) persistSync() error {
 	e.mu.Lock()
 	snap := e.copyPersistedLocked()
 	e.mu.Unlock()
-	e.saveSnapshotAndRecord(snap)
+	return e.saveSnapshotAndRecord(snap)
 }
 
-func (e *inspectionEngine) saveSnapshotAndRecord(snap persistedSnapshot) {
-	err := savePersistedSnapshot(snap)
+// persistSaveHook, when non-nil, wraps the disk save for tests (seq + real save).
+// Production leaves it nil. The hook's returned error is what persistSync reports
+// and what applyPersistResultLocked records for this seq.
+var persistSaveHook func(seq uint64, save func() error) error
+
+func (e *inspectionEngine) saveSnapshotAndRecord(snap persistedSnapshot) error {
+	save := func() error { return savePersistedSnapshot(snap) }
+	var err error
+	if hook := persistSaveHook; hook != nil {
+		err = hook(snap.seq, save)
+	} else {
+		err = save()
+	}
 	e.mu.Lock()
 	e.applyPersistResultLocked(snap.seq, err)
 	e.mu.Unlock()
+	return err
 }
 
 // applyPersistResultLocked updates persistError only for snapshots that are not

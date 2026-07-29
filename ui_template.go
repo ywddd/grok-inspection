@@ -80,13 +80,14 @@ const uiDocMid = `  </style>
         </div>
 
         <div class="schedule-row">
-          <span id="scheduleStatus" class="schedule-status">自动巡检状态加载中…</span>
+          <span id="scheduleStatus" class="schedule-status" data-i18n="schedule_loading">自动巡检状态加载中…</span>
           <div class="schedule-actions">
             <div class="schedule-controls">
               <label class="check-control"><input id="scheduleEnabled" type="checkbox"><span data-i18n="schedule_enabled">自动巡检</span></label>
               <div class="field"><label for="scheduleInterval" data-i18n="schedule_interval">间隔（分钟）</label><input id="scheduleInterval" type="number" min="1" max="10080" step="1" value="60"></div>
               <div class="field"><label for="scheduleWorkers" data-i18n="schedule_workers">并发</label><input id="scheduleWorkers" type="number" min="1" max="16" step="1" value="6"></div>
               <label class="check-control"><input id="scheduleIncludeDisabled" type="checkbox"><span data-i18n="schedule_include_disabled">包含已禁用</span></label>
+              <label class="check-control"><input id="scheduleOnlyDisabled" type="checkbox"><span data-i18n="schedule_only_disabled">仅巡检已禁用</span></label>
               <div class="field wide"><label for="scheduleScope" data-i18n="schedule_scope">巡检范围</label>
               <select id="scheduleScope" data-i18n-title="schedule_scope_title" title="全量检测所有账号；抽检沿用上方「抽检」行的数量与比例">
                 <option value="full" data-i18n="schedule_scope_full">全量</option>
@@ -105,6 +106,7 @@ const uiDocMid = `  </style>
                 <option value="delete" data-i18n="schedule_action_delete">删除</option>
               </select>
               </div>
+              <label class="check-control"><input id="scheduleAutoRecoverHealthy" type="checkbox"><span data-i18n="schedule_auto_recover_healthy">健康后自动恢复</span></label>
             </div>
             <button id="scheduleSaveBtn" class="btn soft" type="button"><svg class="ico" data-icon="save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></svg><span data-i18n="schedule_save">保存自动巡检</span></button>
           </div>
@@ -134,6 +136,9 @@ const uiDocMid = `  </style>
           <button id="banRefreshBtn" class="btn" type="button"><svg class="ico" data-icon="refresh-cw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg><span data-i18n="ban_refresh">刷新状态</span></button>
           <button id="banUnbanFilterBtn" class="btn soft" type="button" disabled><svg class="ico" data-icon="unlock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg><span data-i18n="ban_unban_filter">解禁当前分类</span></button>
           <button id="banUnbanAllBtn" class="btn danger" type="button"><svg class="ico" data-icon="shield-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m2 2 20 20"/><path d="M5 5a1 1 0 0 0-.5.1l-1.5.7v7.2c0 5 3.5 7.5 8 9 1.3-.4 2.4-1 3.3-1.7"/><path d="M19.7 14c.2-.7.3-1.4.3-2.1V5l-8-3-3.2 1.2"/></svg><span data-i18n="ban_unban_all">全部解禁</span></button>
+          <button id="banDeleteFilterBtn" class="btn danger" type="button" disabled><svg class="ico" data-icon="trash-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg><span data-i18n="ban_delete_filter">删除当前分类</span></button>
+          <button id="banDeleteAllBtn" class="btn danger" type="button"><svg class="ico" data-icon="trash-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg><span data-i18n="ban_delete_all">全部删除</span></button>
+          <button id="banStopBtn" class="btn" type="button" disabled><svg class="ico" data-icon="square" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="5" y="5" rx="1"/></svg><span data-i18n="ban_stop">停止</span></button>
         </div>
         <span class="hint autoban-pool-status" id="banFilterHint" data-i18n="ban_filter_hint">点击下方卡片筛选分类</span>
       </div>

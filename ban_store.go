@@ -38,13 +38,14 @@ func (s *banStore) Set(entry banEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.bans[entry.AuthID]; ok {
-		// Keep the longer cooldown when a duplicate exhausted event races,
-		// but ALWAYS advance revision so concurrent unban/restore/disable
-		// cannot miss a shorter new reset event.
-		if existing.ResetAt.After(entry.ResetAt) {
+		// Exact free-usage 429 may replace a prior unauthorized permanent ban.
+		// Free accounts often emit transient 401 Authentication required first;
+		// a later true free-usage-exhausted must reclassify the pool entry.
+		if !(entry.ErrorCode == exhaustedErrorCode && existing.ErrorCode == unauthorizedErrorCode) &&
+			existing.ResetAt.After(entry.ResetAt) {
 			entry.ResetAt = existing.ResetAt
 			// Preserve window-bound semantics (manual_unban permanent bans, reason codes).
-			// A shorter 429 must not rewrite a longer 403/401 manual window into quota.
+			// A shorter 429 must not rewrite a longer 403 manual window into quota.
 			entry.ResetSource = existing.ResetSource
 			if existing.ErrorCode != "" {
 				// When ErrorCode is kept from the longer window, diag must match that

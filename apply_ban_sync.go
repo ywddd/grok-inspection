@@ -34,6 +34,8 @@ func syncInspectionBan(store *banStore, target *pluginapi.HostAuthFileEntry, fal
 		return false
 	}
 
+	resetAt, resetSource := inspectionBanWindow(errorCode, now, loadedConfig())
+
 	// Collapse an older entry keyed by another alias before writing the canonical
 	// file-name key, so the same account cannot appear twice in the shared pool.
 	clearBansMatchingTargetInStore(store, target, fallback)
@@ -42,11 +44,34 @@ func syncInspectionBan(store *banStore, target *pluginapi.HostAuthFileEntry, fal
 		Provider:    provider,
 		ErrorCode:   errorCode,
 		BannedAt:    now,
-		ResetAt:     now.AddDate(100, 0, 0),
-		ResetSource: manualInspectionBanResetSource,
+		ResetAt:     resetAt,
+		ResetSource: resetSource,
 		CpaSynced:   true,
 	})
 	return true
+}
+
+// inspectionBanWindow maps an inspection-selected ban reason to reset timing.
+// free-usage-exhausted uses FallbackHours (default 24h); 401/402/403 stay permanent.
+func inspectionBanWindow(errorCode string, now time.Time, cfg pluginConfig) (time.Time, string) {
+	errorCode = strings.TrimSpace(errorCode)
+	var status int
+	switch errorCode {
+	case exhaustedErrorCode:
+		status = http.StatusTooManyRequests
+	case permissionDeniedErrorCode:
+		status = http.StatusForbidden
+	case spendingLimitErrorCode:
+		status = http.StatusPaymentRequired
+	case unauthorizedErrorCode:
+		status = http.StatusUnauthorized
+	default:
+		return now.AddDate(100, 0, 0), manualInspectionBanResetSource
+	}
+	if resetAt, resetSource, ok := resolveBanWindow(status, errorCode, nil, now, cfg); ok {
+		return resetAt, resetSource
+	}
+	return now.AddDate(100, 0, 0), manualInspectionBanResetSource
 }
 
 // clearBansMatchingTarget drops autoban pool rows for the same account identity.
